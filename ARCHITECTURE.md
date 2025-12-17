@@ -17,38 +17,38 @@ The **Security Remediation Intelligence System** is an agentic AI platform desig
 The system follows a modern, decoupled architecture designed for scalability and cloud deployment (AWS).
 
 ```mermaid
-flowchart TB
-    subgraph Frontend ["Frontend (Next.js)"]
-        UI[Dashboard UI]
-        Auth[Clerk Auth]
+flowchart TD
+    subgraph Frontend_Group ["Frontend Application"]
+        UI["Dashboard UI<br/>(Next.js)"]
+        Auth["Clerk Auth"]
     end
 
-    subgraph Backend ["Backend (FastAPI + Agno)"]
-        API[API Gateway]
-        Orch[Remediation Orchestrator]
+    subgraph Backend_Group ["Backend Services"]
+        API["API Gateway<br/>(FastAPI)"]
+        Orch["Remediation Orchestrator"]
         
-        subgraph Scanners ["Security Scanners"]
-            Semgrep[Semgrep (SAST)]
-            Checkov[Checkov (IaC)]
-            Trivy[Trivy (SCA)]
+        subgraph Scanners_Group ["Security Scanners"]
+            Semgrep["Semgrep (SAST)"]
+            Checkov["Checkov (IaC)"]
+            Trivy["Trivy (SCA)"]
         end
 
-        subgraph Agents ["AI Agent Core"]
-            Gen[Generator Agent\n(DeepSeek LLM)]
-            Eval[Evaluator Agent\n(False Positive Detection)]
+        subgraph Agents_Group ["AI Agent Core"]
+            Gen["Generator Agent<br/>(DeepSeek LLM)"]
+            Eval["Evaluator Agent<br/>(False Positive Detection)"]
         end
         
-        subgraph Storage ["Persistence Layer"]
-            DB[Results Store (JSON/DB)]
-            Vector[Vector Store (S3/LanceDB)]
+        subgraph Storage_Group ["Persistence Layer"]
+            DB[("Results Store<br/>(JSON/DB)")]
+            Vector[("Vector Store<br/>(S3/LanceDB)")]
         end
     end
     
     UI <--> API
     API --> Orch
-    Orch --> Scanners
-    Orch <--> Agents
-    Agents <--> Vector
+    Orch --> Scanners_Group
+    Orch <--> Agents_Group
+    Agents_Group <--> Vector
     Orch --> DB
 ```
 
