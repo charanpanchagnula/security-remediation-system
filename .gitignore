@@ -205,3 +205,19 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Project Specific
+backend/local_storage/
+backend/work_dir/
+backend/tests/__pycache__/
+
+# Frontend
+frontend/.next/
+frontend/node_modules/
+frontend/out/
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/.terraform.lock.hcl
