@@ -132,3 +132,78 @@ class RemediationResponse(BaseModel):
 *   **IDE Integration:** VS Code extension to apply these fixes locally.
 *   **GitHub Bot:** Auto-open Pull Requests with the generated fixes.
 *   **Enterprise Integration:** Jira/ServiceNow webhooks for ticket tracking.
+
+---
+
+## 7. Getting Started (Local Development)
+
+Follow these steps to run the system locally on your machine.
+
+### Prerequisites
+*   **Python 3.11+**
+*   **Node.js 18+**
+*   **Docker** (required for running scanners like Semgrep/Trivy locally if not installed natively)
+*   **uv** (Python package manager): `curl -LsSf https://astral.sh/uv/install.sh | sh`
+
+### 1. Backend Setup
+
+1.  Navigate to the backend directory:
+    ```bash
+    cd backend
+    ```
+
+2.  Create a `.env` file in the `backend` directory (or use the root `.env` if configured):
+    ```env
+    APP_ENV=local_mock
+    DEEPSEEK_API_KEY=your_key_here
+    GITHUB_TOKEN=your_github_token
+    # Optional: AWS Credentials if testing S3
+    ```
+
+3.  Install dependencies using `uv`:
+    ```bash
+    uv sync
+    ```
+
+4.  Start the API Server:
+    ```bash
+    APP_ENV=local_mock uv run uvicorn src.remediation_api.main:app --port 8000 --reload
+    ```
+
+5.  Start the Background Worker (in a separate terminal):
+    ```bash
+    APP_ENV=local_mock uv run python -m src.remediation_api.worker
+    ```
+
+### 2. Frontend Setup
+
+1.  Navigate to the frontend directory:
+    ```bash
+    cd frontend
+    ```
+
+2.  Create a `.env.local` file:
+    ```env
+    NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=your_clerk_key
+    CLERK_SECRET_KEY=your_clerk_secret
+    ```
+
+3.  Install dependencies:
+    ```bash
+    npm install
+    ```
+
+4.  Start the development server:
+    ```bash
+    npm run dev
+    ```
+
+5.  Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+### 3. Usage
+1.  Sign in/Sign up via Clerk.
+2.  Go to **New Scan**.
+3.  Enter a publicly accessible GitHub repository URL.
+4.  Watch the scan progress and click "View Details" when complete.
+5.  Click **"Generate AI Remediation"** on any vulnerability to see the agent in action.
