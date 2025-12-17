@@ -18,12 +18,12 @@ export default function DashboardWelcome() {
             {/* Header */}
             <header className="bg-white dark:bg-gray-800 shadow-sm">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-                    <div className="flex items-center">
+                    <Link href="/dashboard" className="flex items-center">
                         <Shield className="h-8 w-8 text-indigo-600" />
                         <span className="ml-2 text-xl font-bold text-gray-900 dark:text-white">
                             Remediation Intelligence
                         </span>
-                    </div>
+                    </Link>
                     <div>
                         <UserButton afterSignOutUrl="/" />
                     </div>

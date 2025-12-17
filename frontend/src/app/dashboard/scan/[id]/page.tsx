@@ -3,6 +3,7 @@
 import { useEffect, useState, use } from "react";
 import { scanApi, ScanDetail, Vulnerability } from "@/services/api";
 import Link from "next/link";
+import ReactMarkdown from 'react-markdown';
 import { ArrowLeft, AlertTriangle, CheckCircle, FileText, ExternalLink, Shield, Loader2, Wand2 } from "lucide-react";
 
 export default function ScanPage({ params }: { params: Promise<{ id: string }> }) {
@@ -116,12 +117,12 @@ export default function ScanPage({ params }: { params: Promise<{ id: string }> }
             <nav className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="flex justify-between h-16">
-                        <div className="flex items-center">
+                        <Link href="/dashboard" className="flex items-center">
                             <Shield className="h-8 w-8 text-indigo-600" />
                             <span className="ml-2 text-xl font-bold text-gray-900 dark:text-white">
                                 Remediation Intelligence
                             </span>
-                        </div>
+                        </Link>
                     </div>
                 </div>
             </nav>
@@ -195,7 +196,7 @@ export default function ScanPage({ params }: { params: Promise<{ id: string }> }
                                     <p className="text-xs text-gray-500 mt-1 truncate">
                                         {vuln.file_path}:{vuln.start_line}
                                     </p>
-                                    {vuln.remediation && (
+                                    {scan?.remediations?.some(r => r.vulnerability_id === vuln.rule_id) && (
                                         <div className="mt-2 flex items-center text-xs text-green-600 font-medium">
                                             <CheckCircle className="h-3 w-3 mr-1" />
                                             Fix Available
@@ -302,10 +303,22 @@ export default function ScanPage({ params }: { params: Promise<{ id: string }> }
                                                 {remediation.code_diff && <pre className="text-sm"><code>{remediation.code_diff}</code></pre>}
                                             </div>
 
-                                            <div className="bg-blue-50 dark:bg-blue-900/20 rounded-md p-4">
-                                                <h4 className="text-sm font-bold text-blue-800 dark:text-blue-300 mb-1">Explanation</h4>
-                                                <div className="text-sm text-blue-700 dark:text-blue-200 whitespace-pre-wrap">
-                                                    {remediation.explanation}
+                                            <div className="mt-6 border-t border-gray-100 dark:border-gray-700 pt-6">
+                                                <h4 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wider mb-3">Detailed Explanation</h4>
+                                                <div className="prose prose-sm dark:prose-invert max-w-none text-gray-700 dark:text-gray-300">
+                                                    <ReactMarkdown
+                                                        components={{
+                                                            h1: ({ node, ...props }) => <h1 className="text-xl font-bold text-gray-900 dark:text-white mt-4 mb-2" {...props} />,
+                                                            h2: ({ node, ...props }) => <h2 className="text-lg font-bold text-gray-900 dark:text-white mt-3 mb-2" {...props} />,
+                                                            h3: ({ node, ...props }) => <h3 className="text-base font-bold text-gray-900 dark:text-white mt-2 mb-1" {...props} />,
+                                                            p: ({ node, ...props }) => <p className="mb-2 leading-relaxed" {...props} />,
+                                                            ul: ({ node, ...props }) => <ul className="list-disc pl-5 mb-2 space-y-1" {...props} />,
+                                                            li: ({ node, ...props }) => <li className="pl-1" {...props} />,
+                                                            code: ({ node, ...props }) => <code className="bg-gray-100 dark:bg-gray-700 rounded px-1 py-0.5 text-sm font-mono text-pink-500" {...props} />,
+                                                        }}
+                                                    >
+                                                        {remediation.explanation}
+                                                    </ReactMarkdown>
                                                 </div>
                                             </div>
                                         </div>
