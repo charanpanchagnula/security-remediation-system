@@ -221,3 +221,7 @@ terraform/.terraform/
 terraform/*.tfstate
 terraform/*.tfstate.backup
 terraform/.terraform.lock.hcl
+
+BACKEND_WALKTHROUGH.md
+FRONTEND_WALKTHROUGH.md
+FRONTEND_ARCHITECTURE_AND_MIGRATION.md

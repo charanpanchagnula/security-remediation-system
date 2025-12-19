@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { Shield, Check, Lock, Cpu, ArrowRight } from "lucide-react";
-import { useUser } from "@clerk/nextjs";
+import { useUser } from "@clerk/clerk-react";
 
 export default function LandingPage() {
   const { isSignedIn } = useUser();

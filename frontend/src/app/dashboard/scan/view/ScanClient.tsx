@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useEffect, useState } from "react";
 import { scanApi, ScanDetail, Vulnerability } from "@/services/api";
 import Link from "next/link";
 import ReactMarkdown from 'react-markdown';
-import { ArrowLeft, AlertTriangle, CheckCircle, FileText, ExternalLink, Shield, Loader2, Wand2 } from "lucide-react";
+import { ArrowLeft, CheckCircle, FileText, ExternalLink, Shield, Loader2, Wand2 } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 
-export default function ScanPage({ params }: { params: Promise<{ id: string }> }) {
-    const { id } = use(params);
+export default function ScanClient() {
+    const searchParams = useSearchParams();
+    const id = searchParams.get("id");
     const [scan, setScan] = useState<ScanDetail | null>(null);
     const [loading, setLoading] = useState(true);
     const [selectedVuln, setSelectedVuln] = useState<Vulnerability | null>(null);
@@ -17,6 +19,7 @@ export default function ScanPage({ params }: { params: Promise<{ id: string }> }
 
     useEffect(() => {
         const fetchScan = async () => {
+            if (!id) return;
             try {
                 const data = await scanApi.getScan(id);
                 setScan(data);
@@ -33,7 +36,7 @@ export default function ScanPage({ params }: { params: Promise<{ id: string }> }
     }, [id]);
 
     if (loading) {
-        return <div className="p-12 text-center">Loading scan details...</div>;
+        return <div className="p-12 text-center text-gray-500">Loading scan details...</div>;
     }
 
     if (!scan) {
@@ -64,7 +67,6 @@ export default function ScanPage({ params }: { params: Promise<{ id: string }> }
         );
     }
 
-    // Remediation JSON correlates via 'vulnerability_id' which matches the 'rule_id' of the vulnerability
     const remediation = selectedVuln ? scan.remediations?.find(r => r.vulnerability_id === selectedVuln.rule_id) : null;
 
     const handleBatchRemediate = async () => {
@@ -224,7 +226,7 @@ export default function ScanPage({ params }: { params: Promise<{ id: string }> }
                                         </h3>
                                         {scan.repo_url && (
                                             <a
-                                                href={`${scan.repo_url.replace(/\/$/, "")}/blob/HEAD/${selectedVuln.file_path.replace(/^\//, "")}#L${selectedVuln.start_line}-L${selectedVuln.end_line}`}
+                                                href={`${scan.repo_url.replace(/\/$/, "")}/blob/${scan.commit_sha || scan.branch || "main"}/${selectedVuln.file_path.replace(/^\//, "")}#L${selectedVuln.start_line}-L${selectedVuln.end_line}`}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className="text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 flex items-center"
@@ -286,7 +288,7 @@ export default function ScanPage({ params }: { params: Promise<{ id: string }> }
                                                             <p className="text-xs text-gray-500 font-mono">{change.file_path}</p>
                                                             {scan.repo_url && (
                                                                 <a
-                                                                    href={`${scan.repo_url.replace(/\/$/, "")}/blob/HEAD/${change.file_path.replace(/^\//, "")}`}
+                                                                    href={`${scan.repo_url.replace(/\/$/, "")}/blob/${scan.commit_sha || scan.branch || "main"}/${change.file_path.replace(/^\//, "")}`}
                                                                     target="_blank"
                                                                     rel="noopener noreferrer"
                                                                     className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center"
@@ -299,7 +301,6 @@ export default function ScanPage({ params }: { params: Promise<{ id: string }> }
                                                         <pre className="text-sm p-2 bg-gray-800 rounded border border-gray-700"><code>{change.new_code}</code></pre>
                                                     </div>
                                                 ))}
-                                                {/* Fallback if code_diff was used previously */}
                                                 {remediation.code_diff && <pre className="text-sm"><code>{remediation.code_diff}</code></pre>}
                                             </div>
 
@@ -308,13 +309,13 @@ export default function ScanPage({ params }: { params: Promise<{ id: string }> }
                                                 <div className="prose prose-sm dark:prose-invert max-w-none text-gray-700 dark:text-gray-300">
                                                     <ReactMarkdown
                                                         components={{
-                                                            h1: ({ node, ...props }) => <h1 className="text-xl font-bold text-gray-900 dark:text-white mt-4 mb-2" {...props} />,
-                                                            h2: ({ node, ...props }) => <h2 className="text-lg font-bold text-gray-900 dark:text-white mt-3 mb-2" {...props} />,
-                                                            h3: ({ node, ...props }) => <h3 className="text-base font-bold text-gray-900 dark:text-white mt-2 mb-1" {...props} />,
-                                                            p: ({ node, ...props }) => <p className="mb-2 leading-relaxed" {...props} />,
-                                                            ul: ({ node, ...props }) => <ul className="list-disc pl-5 mb-2 space-y-1" {...props} />,
-                                                            li: ({ node, ...props }) => <li className="pl-1" {...props} />,
-                                                            code: ({ node, ...props }) => <code className="bg-gray-100 dark:bg-gray-700 rounded px-1 py-0.5 text-sm font-mono text-pink-500" {...props} />,
+                                                            h1: ({ ...props }) => <h1 className="text-xl font-bold text-gray-900 dark:text-white mt-4 mb-2" {...props} />,
+                                                            h2: ({ ...props }) => <h2 className="text-lg font-bold text-gray-900 dark:text-white mt-3 mb-2" {...props} />,
+                                                            h3: ({ ...props }) => <h3 className="text-base font-bold text-gray-900 dark:text-white mt-2 mb-1" {...props} />,
+                                                            p: ({ ...props }) => <p className="mb-2 leading-relaxed" {...props} />,
+                                                            ul: ({ ...props }) => <ul className="list-disc pl-5 mb-2 space-y-1" {...props} />,
+                                                            li: ({ ...props }) => <li className="pl-1" {...props} />,
+                                                            code: ({ ...props }) => <code className="bg-gray-100 dark:bg-gray-700 rounded px-1 py-0.5 text-sm font-mono text-pink-500" {...props} />,
                                                         }}
                                                     >
                                                         {remediation.explanation}
@@ -334,7 +335,6 @@ export default function ScanPage({ params }: { params: Promise<{ id: string }> }
                                                 setGenerating(new Set(generating).add(selectedVuln.id));
                                                 try {
                                                     const rem = await scanApi.generateRemediation(scan.scan_id, selectedVuln.id);
-                                                    // Update local state immediately
                                                     const updatedScan = { ...scan };
                                                     if (!updatedScan.remediations) updatedScan.remediations = [];
                                                     updatedScan.remediations.push(rem);

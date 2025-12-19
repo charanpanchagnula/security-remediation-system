@@ -24,15 +24,17 @@ class Orchestrator:
         """Ingestion API: Downloads source, uploads to S3, queues job."""
         
         # 1. Download & Archive
-        archive_key = await github_service.download_and_store(repo_url, commit_sha)
+        archive_key, resolved_sha = await github_service.download_and_store(repo_url, commit_sha)
         
         scan_id = str(uuid.uuid4())
         
         # 2. Construct Message
+        # We pass the resolved SHA to the worker so it knows exactly what was scanned
         message = {
             "scan_id": scan_id,
             "repo_url": repo_url,
-            "commit_sha": commit_sha,
+            "commit_sha": resolved_sha,
+            "branch": commit_sha if commit_sha else "main", # Pass explicitly if possible
             "archive_key": archive_key,
             "scanner_types": scanner_types,
             "timestamp": datetime.utcnow().isoformat()
@@ -45,6 +47,9 @@ class Orchestrator:
         initial_result = {
             "scan_id": scan_id,
             "repo_url": repo_url,
+            "branch": "main" if not commit_sha else commit_sha,  # Use input as branch name if provided
+            "commit_sha": resolved_sha, # Use resolved hash
+            "archive_key": archive_key, # Persist for deletion
             "timestamp": message["timestamp"],
             "status": "queued",
             "scanner_types": scanner_types,
@@ -62,6 +67,8 @@ class Orchestrator:
         """Worker Logic: Processes a scan job from the queue."""
         scan_id = job["scan_id"]
         repo_url = job["repo_url"]
+        commit_sha = job.get("commit_sha")
+        branch = job.get("branch", "main")
         archive_key = job["archive_key"]
         scanner_types = job.get("scanner_types", ["semgrep"])
         
@@ -71,6 +78,9 @@ class Orchestrator:
         in_progress_result = {
             "scan_id": scan_id,
             "repo_url": repo_url,
+            "branch": branch,
+            "commit_sha": commit_sha,
+            "archive_key": archive_key, # Persist
             "timestamp": datetime.utcnow().isoformat(),
             "status": "in_progress",
             "scanner_types": scanner_types,
@@ -81,11 +91,23 @@ class Orchestrator:
         all_vulnerabilities = []
         
         # 1. Run Scanners
-        for scanner in scanner_types:
-            # Run scan (extracts archive internally)
-            # We run in thread to avoid blocking loop
-            result = await asyncio.to_thread(scanner_service.run_scan, archive_key, repo_url, scanner)
-            all_vulnerabilities.extend(result.vulnerabilities)
+        # 1. Run Scanners in Parallel
+        logger.info(f"Running scanners in parallel: {scanner_types}")
+        
+        # Create a list of awaitable tasks
+        scan_tasks = [
+            asyncio.to_thread(scanner_service.run_scan, archive_key, repo_url, scanner)
+            for scanner in scanner_types
+        ]
+        
+        # Execute in parallel
+        results = await asyncio.gather(*scan_tasks, return_exceptions=True)
+        
+        for idx, res in enumerate(results):
+            if isinstance(res, Exception):
+                logger.error(f"Scanner {scanner_types[idx]} failed: {res}")
+            else:
+                all_vulnerabilities.extend(res.vulnerabilities)
             
         logger.info(f"Found {len(all_vulnerabilities)} vulnerabilities in Scan {scan_id}.")
         
@@ -93,6 +115,9 @@ class Orchestrator:
         final_result = {
             "scan_id": scan_id,
             "repo_url": repo_url,
+            "branch": branch,
+            "commit_sha": commit_sha,
+            "archive_key": archive_key, # Persist
             "timestamp": datetime.utcnow().isoformat(),
             "status": "completed",
             "vulnerabilities": [v.model_dump() for v in all_vulnerabilities],
@@ -124,13 +149,14 @@ class Orchestrator:
         # If exists, return it (idempotent)
         existing = next((r for r in remediations if r.get("vulnerability_id") == target_vuln["rule_id"]), None)
         if existing:
-            return existing
+            return RemediationResponse(**existing)
             
         # Reconstruct Vulnerability Object
         vuln_obj = Vulnerability(**target_vuln)
         
-        # Process (Pass repo_url to construct link)
-        rem_response = await self._process_vulnerability(vuln_obj, scan_data["repo_url"])
+        # Process (Pass git_ref for accurate links)
+        git_ref = scan_data.get("commit_sha") or scan_data.get("branch") or "main"
+        rem_response = await self._process_vulnerability(vuln_obj, scan_data["repo_url"], scan_id, git_ref)
         
         if rem_response:
             # Save back to DB
@@ -166,7 +192,8 @@ class Orchestrator:
                 
             vuln_obj = Vulnerability(**v_dict)
             try:
-                rem = await self._process_vulnerability(vuln_obj, scan_data["repo_url"])
+                git_ref = scan_data.get("commit_sha") or scan_data.get("branch") or "main"
+                rem = await self._process_vulnerability(vuln_obj, scan_data["repo_url"], scan_id, git_ref)
                 if rem:
                     new_rems.append(rem.model_dump())
                     # Optimization: Save periodically or at end? 
@@ -181,53 +208,59 @@ class Orchestrator:
             scan_data["summary"]["remediations_generated"] = len(scan_data["remediations"])
             result_service.save_scan_result(scan_id, scan_data)
 
-    async def _process_vulnerability(self, vuln: Vulnerability, repo_url: str) -> Optional[RemediationResponse]:
+    async def _process_vulnerability(self, vuln: Vulnerability, repo_url: str, scan_id: str, git_ref: str = "main") -> Optional[RemediationResponse]:
         # Construct GitHub Link
-        # Assuming default branch if not specified (we can improve this by storing commit_sha in scan result)
-        # For now, simplistic URL construction
+        # Use provided git_ref (commit_sha or branch)
         github_link = None
         if "github.com" in repo_url:
-            # simple parse, ideally we store 'commit_sha' in ScanResult
-            # But currently `repo_url` in scan result is just the base URL
-            clean_repo = repo_url.rstrip(".git")
-            # We don't easily have the relative path from the archive unless scanner provides it correctly.
-            # Scanner provides absolute path in /tmp/... 
-            # We need to strip the temp dir to get relative path.
-            # But `file_path` in vuln object usually comes from scanner.
-            # Let's trust the `file_path` is somewhat relative or we can hint the LLM.
-            # Actually Checkov gives absolute paths in local runs.
-            # We can try to infer relative path if we knew the root.
-            # For now, let's just pass what we have, or "HEAD"
-            github_link = f"{clean_repo}/blob/HEAD/{vuln.file_path.lstrip('/')}#L{vuln.start_line}-L{vuln.end_line}"
+            clean_repo = repo_url.rstrip(".git").rstrip("/")
+            # Use the exact git_ref for permalinks
+            github_link = f"{clean_repo}/blob/{git_ref}/{vuln.file_path.lstrip('/')}#L{vuln.start_line}-L{vuln.end_line}"
 
-        # 1. Check Vector Store
-        embedding = [0.0] * 1536 
-        existing = await asyncio.to_thread(self.vector_store.search, embedding)
+        # 1. Search Vector Store (Pass text directly, Agno handles embedding)
+        # Construct a rich query
+        query_text = f"{vuln.rule_id} {vuln.message}\n{vuln.code_snippet}"
         
+        hits = await asyncio.to_thread(self.vector_store.search, query_text)
+        
+        reference_remediation = None
         feedback = None
         
-        if existing:
-            logger.info(f"Vector hit for {vuln.rule_id}. Evaluating guidance...")
-            # Feed to Evaluator as requested by user
-            evaluation = await asyncio.to_thread(
-                evaluator_agent.evaluate_fix, vuln, existing
-            )
+        if hits:
+            best_hit = hits[0] # List[Dict]
+            logger.info(f"Agno Knowledge Hit: Score {best_hit['score']}")
             
-            logger.info(f"[Evaluator] Score: {evaluation.confidence_score} | Feedback: {evaluation.feedback}")
+            try:
+                # Deserialize the stored JSON back to object
+                cached_rem_json = best_hit["remediation"]
+                existing_rem = RemediationResponse.model_validate_json(cached_rem_json)
+                
+                # Check Score (Using Agno/LanceDB score. NOTE: LanceDB is distance, Agno might invert it.
+                # For now, let's rely on success of retrieval implying relevance, but check Evaluator.)
+                
+                # Evaluate if the retrieved fix is completely valid AS IS
+                evaluation = await asyncio.to_thread(
+                    evaluator_agent.evaluate_fix, vuln, existing_rem
+                )
+                
+                logger.info(f"[Evaluator] Score: {evaluation.confidence_score} | Feedback: {evaluation.feedback}")
 
-            if evaluation.confidence_score >= settings.CONFIDENCE_THRESHOLD:
-                logger.info(f"Vector guidance sufficient. Returning cached.")
-                return existing
-            else:
-                logger.info(f"Vector guidance insufficient. Proceeding to generation.")
-                feedback = f"Previous attempt found in vector store was insufficient: {evaluation.feedback}"
+                if evaluation.confidence_score >= settings.CONFIDENCE_THRESHOLD:
+                    logger.info(f"Vector guidance sufficient. Returning cached.")
+                    return existing_rem
+                else:
+                    logger.info(f"Vector guidance insufficient. Proceeding to generation with context.")
+                    reference_remediation = existing_rem
+                    feedback = f"Previous similar fix was found but rejected for this specific context: {evaluation.feedback}"
+            except Exception as e:
+                logger.error(f"Failed to process vector hit: {e}")
         
-        # 2. Generator Loop
+        # 3. Generator Loop
         for attempt in range(settings.MAX_RETRIES + 1):
             try:
                 # Generator (Run in thread)
                 remediation = await asyncio.to_thread(
-                    generator_agent.generate_fix, vuln, feedback, github_link
+                    generator_agent.generate_fix, vuln, feedback, github_link, reference_remediation
                 )
                 
                 # Evaluator (Run in thread)
@@ -243,13 +276,19 @@ class Orchestrator:
                     remediation.confidence_score = evaluation.confidence_score
                     remediation.is_false_positive = evaluation.is_false_positive
                     
+                    # Store new embedding for future
                     await asyncio.to_thread(
                         self.vector_store.store, 
-                        embedding, 
-                        remediation, 
-                        {"vuln_id": vuln.id, "rule_id": vuln.rule_id}
+                        vuln.rule_id,
+                        remediation.model_dump_json(),
+                        vuln.code_snippet,
+                        scan_id
                     )
                     return remediation
+                
+                feedback = evaluation.feedback # Feedback loop
+                # Clear reference after first attempt to avoid biasing if it was totally wrong
+                reference_remediation = None 
                 
                 feedback = evaluation.feedback # Feedback loop
                 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { UserButton, useUser } from "@clerk/nextjs";
+import { UserButton, useUser } from "@clerk/clerk-react";
 import Link from "next/link";
 import { Plus, Trash2, Shield, RefreshCw } from "lucide-react";
 import { scanApi, ScanSummary } from "@/services/api";
@@ -99,7 +99,10 @@ export default function Dashboard() {
                                             <div className="min-w-0 flex-1 sm:flex sm:items-center sm:justify-between">
                                                 <div className="truncate">
                                                     <div className="flex text-sm">
-                                                        <p className="font-medium text-indigo-600 truncate">{scan.repo_url}</p>
+                                                        <p className="font-medium text-indigo-600 truncate">
+                                                            {scan.repo_url}
+                                                            {scan.branch && <span className="ml-2 text-gray-500 font-normal text-xs bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded-full">{scan.branch}</span>}
+                                                        </p>
                                                         <p className="ml-1 flex-shrink-0 font-normal text-gray-500">
                                                             / {scan.scan_id.slice(0, 8)}
                                                         </p>
@@ -132,7 +135,7 @@ export default function Dashboard() {
                                             </div>
                                             <div className="ml-5 flex-shrink-0 flex items-center space-x-4">
                                                 <Link
-                                                    href={`/dashboard/scan/${scan.scan_id}`}
+                                                    href={`/dashboard/scan/view?id=${scan.scan_id}`}
                                                     className="text-indigo-600 hover:text-indigo-900 font-medium text-sm"
                                                 >
                                                     View Details

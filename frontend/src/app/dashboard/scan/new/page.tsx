@@ -91,7 +91,7 @@ export default function NewScanPage() {
                                     onChange={() => toggleScanner("semgrep")}
                                     className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
                                 />
-                                <span className="text-gray-700 dark:text-gray-300">Semgrep (SAST)</span>
+                                <span className="text-gray-700 dark:text-gray-300">Semgrep (SAST & MCP)</span>
                             </label>
                             <label className="flex items-center space-x-3">
                                 <input
@@ -111,6 +111,7 @@ export default function NewScanPage() {
                                 />
                                 <span className="text-gray-700 dark:text-gray-300">Trivy (SCA & Secrets)</span>
                             </label>
+
                         </div>
                     </div>
 

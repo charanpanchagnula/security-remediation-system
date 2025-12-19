@@ -23,7 +23,7 @@ class GitHubService:
         parts = repo_url.rstrip("/").split("/")
         return parts[-2], parts[-1]
 
-    async def download_and_store(self, repo_url: str, commit_sha: Optional[str] = None) -> str:
+    async def download_and_store(self, repo_url: str, commit_sha: Optional[str] = None) -> tuple[str, str]:
         owner, repo = self._parse_repo_url(repo_url)
         
         # Unique ID for this scan/download op
@@ -48,6 +48,12 @@ class GitHubService:
                 logger.info(f"Cloning {repo_url} (default branch)...")
                 subprocess.run(["git", "clone", "--depth", "1", repo_url, str(clone_dir)], check=True, capture_output=True)
                 
+            # Resolve the actual commit SHA
+            # This is critical for generating permalinks in the UI
+            result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=clone_dir, check=True, capture_output=True)
+            resolved_sha = result.stdout.decode().strip()
+            logger.info(f"Resolved commit SHA: {resolved_sha}")
+
             # Remove .git directory to save space/time and avoid scanning it
             git_dir = clone_dir / ".git"
             if git_dir.exists():
@@ -80,6 +86,6 @@ class GitHubService:
         except Exception:
             pass # Best effort cleanup
             
-        return storage_key
+        return storage_key, resolved_sha
 
 github_service = GitHubService()

@@ -1,130 +1,136 @@
-from abc import ABC, abstractmethod
-from typing import List, Optional, Dict, Any
+import logging
 import json
-import os
-import uuid
-from datetime import datetime
-from pathlib import Path
+from typing import List, Dict, Optional, Any
+from abc import ABC, abstractmethod
 from pydantic import BaseModel
-from ..models.remediation import RemediationResponse
-from ..config import settings
-from ..services.storage import get_storage
-from ..logger import get_logger
+from agno.knowledge.knowledge import Knowledge
+from agno.vectordb.lancedb import LanceDb
+from agno.knowledge.embedder.openai import OpenAIEmbedder
+from src.remediation_api.config import settings
 
-logger = get_logger(__name__)
-
-class VectorEntry(BaseModel):
-    id: str
-    embedding: List[float]
-    metadata: Dict[str, Any]
+logger = logging.getLogger(__name__)
 
 class VectorStore(ABC):
     @abstractmethod
-    def search(self, embedding: List[float], threshold: float = 0.85) -> Optional[RemediationResponse]:
-        """Search for similar remediation."""
+    def search(self, query_text: str, limit: int = 1) -> List[Dict[str, Any]]:
         pass
-        
+
     @abstractmethod
-    def store(self, embedding: List[float], remediation: RemediationResponse, metadata: Dict[str, Any]):
-        """Store remediation with embedding."""
+    def store(self, rule_id: str, remediation_text: str, original_code: str, scan_id: str):
         pass
 
-class LocalVectorStore(VectorStore):
-    """Simple JSON-based store for local dev."""
+    @abstractmethod
+    def delete_scan(self, scan_id: str):
+        pass
+
+class AgnoVectorStore(VectorStore):
+    """
+    Implementation using Agno's Knowledge Base with LanceDB.
+    Supports both Local (file-based) and S3 behavior.
+    """
     def __init__(self):
-        self.file_path = Path(settings.WORK_DIR) / "vector_store.json"
+        # Initialize LanceDB. In 'local' or 'local_mock', this creates a local folder.
+        # In production, this can point to S3 if configured via URI.
+        uri = "work_dir/lancedb" 
         
-    def _load(self) -> List[VectorEntry]:
-        if not self.file_path.exists():
-            return []
-        try:
-            with open(self.file_path, "r") as f:
-                data = json.load(f)
-                return [VectorEntry(**item) for item in data]
-        except Exception:
-            return []
-
-    def _save(self, entries: List[VectorEntry]):
-        with open(self.file_path, "w") as f:
-            json.dump([e.model_dump() for e in entries], f, indent=2)
-
-    def search(self, embedding: List[float], threshold: float = 0.85) -> Optional[RemediationResponse]:
-        # Local mock: Real cosine similarity check would go here.
-        # For now, we return None to force generation, 
-        # or we could implement a basic dot product if we had numpy.
-        # We'll just mock a "miss" for now.
-        return None
-
-    def store(self, embedding: List[float], remediation: RemediationResponse, metadata: Dict[str, Any]):
-        entries = self._load()
-        entry = VectorEntry(
-            id=str(uuid.uuid4()),
-            embedding=embedding,
-            metadata={
-                **metadata,
-                "remediation": remediation.model_dump(),
-                "timestamp": datetime.utcnow().isoformat()
-            }
+        self.knowledge_base = Knowledge(
+            vector_db=LanceDb(
+                table_name="remediations",
+                uri=uri,
+                embedder=OpenAIEmbedder(id="text-embedding-3-small", api_key=settings.OPENAI_API_KEY),
+            ),
         )
-        entries.append(entry)
-        entries.append(entry)
-        self._save(entries)
-        logger.info(f"Stored valid remediation for {metadata.get('rule_id')} in local vector store.")
+
+    def search(self, query_text: str, limit: int = 1) -> List[Dict[str, Any]]:
+        """
+        Uses Agno's built-in search to find relevant remediations.
+        """
+        if not settings.OPENAI_API_KEY:
+            logger.warning("OPENAI_API_KEY not set. Skipping vector search.")
+            return []
+
+        try:
+            # Agno's search returns a list of Document objects with scores
+            results = self.knowledge_base.search(query=query_text, max_results=limit)
+            
+            hits = []
+            for res in results:
+                # Agno returns score as distance or similarity? 
+                # LanceDB typically returns distance, but Agno might normalize.
+                # Assuming 'meta_data' contains our stored metadata.
+                if res.meta_data:
+                    # LanceDB returns distance (0.0 is exact match). 
+                    # Convert to similarity (1.0 is exact match).
+                    distance = res.score if hasattr(res, 'score') else 0.0
+                    similarity = 1.0 - distance
+                    
+                    hits.append({
+                        "score": similarity, 
+                        "remediation": res.meta_data.get("remediation", ""),
+                        "rule_id": res.meta_data.get("rule_id", ""),
+                        "scan_id": res.meta_data.get("scan_id", "")
+                    })
+            
+            if hits:
+                logger.info(f"Agno Knowledge Search Hit: {len(hits)} results.")
+            else:
+                logger.info("Agno Knowledge Search Miss.")
+                
+            return hits
+            
+        except Exception as e:
+            logger.error(f"Vector search failed: {e}")
+            return []
+
+    def store(self, rule_id: str, remediation_text: str, original_code: str, scan_id: str):
+        """
+        Wraps the remediation as a Document and loads it into the Knowledge Base.
+        """
+        if not settings.OPENAI_API_KEY:
+            logger.warning("OPENAI_API_KEY not set. Skipping vector storage.")
+            return
+
+        try:
+            # Create a rich document representing this fix
+            content = f"Rule: {rule_id}\nCode Context:\n{original_code}\nRemediation:\n{remediation_text}"
+            
+            meta_data = {
+                    "rule_id": rule_id,
+                    "remediation": remediation_text,
+                    "scan_id": scan_id,
+                    "type": "remediation_history"
+            }
+            
+            # Load into KB using add_content
+            self.knowledge_base.add_content(
+                text_content=content,
+                metadata=meta_data
+            )
+            logger.info(f"Stored remediation for {rule_id} in LanceDB.")
+            
+        except Exception as e:
+            logger.error(f"Failed to store vector: {e}")
+
+    def delete_scan(self, scan_id: str):
+        # LanceDB/Agno deletion is complex (row-level). 
+        # For MVP, we might skip precise valid deletion or recreate table.
+        # This is acceptable for "Local RAG".
+        logger.warning(f"Vector deletion for scan {scan_id} not fully implemented in LanceDB adapter yet.")
 
 class S3VectorStore(VectorStore):
-    """S3 implementation for production."""
-    def __init__(self):
-        self.storage = get_storage()
-        self.bucket = settings.S3_VECTOR_BUCKET_NAME
-        
-    def search(self, embedding: List[float], threshold: float = 0.85) -> Optional[RemediationResponse]:
-        # User Logic: "get the object from s3 vectors"
-        # Since we don't have a real Vector DB URI yet, we'll try to fetch a "known good" remediation 
-        # based on a deterministic key (e.g., rule_id hash) from a "vectors" folder.
-        # This is a placeholder for the actual Vector DB logic.
-        
-        # NOTE: In a real system, you'd pass the embedding to a vector DB (Pinecone, Opensearch).
-        # Here, we simulate a "hit" if a file exists for the rule_id/vuln signature.
-        # We need the rule_id which isn't passed in 'search', but usually vector search is purely semantic.
-        # For this requirement, we'll assume we can't find it purely by embedding in this S3 implementation 
-        # without an external index. 
-        # So we return None for now, OR we could accept metadata in search() (interface change required).
-        
-        # User asked: "get the object from s3 vectors... feed it to evaluator"
-        # I will keep returning None here unless I change the interface to accept rule_id.
-        # BUT, the user also said "placeholder functionality for s3 vector interaction".
-        
-        # BUT, the user also said "placeholder functionality for s3 vector interaction".
-        
+    # Keep placeholder for Prod if different from LanceDB s3 config
+    def search(self, query_text: str, limit: int = 1) -> List[Dict[str, Any]]:
         logger.info("Searching S3 Vector Store (Placeholder)... Miss.")
-        return None
+        return []
 
-    def store(self, embedding: List[float], remediation: RemediationResponse, metadata: Dict[str, Any]):
-        # Store as JSON in S3
-        # Key structure: vectors/{rule_id}/{uuid}.json
-        rule_id = metadata.get("rule_id", "unknown_rule")
-        key = f"vectors/{rule_id}/{uuid.uuid4()}.json"
-        
-        data = {
-            "embedding": embedding,
-            "remediation": remediation.model_dump(),
-            "metadata": metadata,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-        # Create temp file and upload
-        tmp_path = f"/tmp/{uuid.uuid4()}.json"
-        with open(tmp_path, "w") as f:
-            json.dump(data, f)
-            
-        try:
-            self.storage.upload_file(tmp_path, key)
-            logger.info(f"Stored remediation vector in S3: {key}")
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+    def store(self, rule_id: str, remediation_text: str, original_code: str, scan_id: str):
+        logger.info(f"Skipping S3 vector storage for {scan_id}: Not supported in flat-file mode without index.")
+
+    def delete_scan(self, scan_id: str):
+        logger.warning(f"Skipping S3 vector deletion for {scan_id}: Not supported in flat-file mode without index.")
 
 def get_vector_store() -> VectorStore:
-    if settings.APP_ENV == "local":
-        return LocalVectorStore()
+    # Use Agno Store for Local/Dev
+    if settings.APP_ENV in ["local", "local_mock"]:
+        return AgnoVectorStore()
     return S3VectorStore()
