@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api/v1';
 
 const api = axios.create({
   baseURL: API_URL,
@@ -9,10 +9,25 @@ const api = axios.create({
 export interface ScanSummary {
   scan_id: string;
   repo_url: string;
+  branch?: string;
+  commit_sha?: string;
   timestamp: string;
   vuln_count: number;
   rem_count: number;
   status: string;
+}
+
+
+
+export interface ScanDetail {
+  scan_id: string;
+  repo_url: string;
+  branch?: string;
+  commit_sha?: string;
+  timestamp: string;
+  status?: string;
+  vulnerabilities?: Vulnerability[];
+  remediations?: Remediation[];
 }
 
 export interface Vulnerability {
@@ -52,14 +67,7 @@ export interface Remediation {
   code_diff?: string; // Legacy support
 }
 
-export interface ScanDetail {
-  scan_id: string;
-  repo_url: string;
-  timestamp: string;
-  status?: string; // Add status field
-  vulnerabilities?: Vulnerability[];
-  remediations?: Remediation[]; // Changed from Record<string, Remediation>
-}
+
 
 export const scanApi = {
   triggerScan: async (repoUrl: string, branch?: string, scanners: string[] = ['semgrep']) => {

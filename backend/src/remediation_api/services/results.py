@@ -48,6 +48,8 @@ class ResultService:
                     summary = {
                         "scan_id": scan_data.get("scan_id"),
                         "repo_url": scan_data.get("repo_url"),
+                        "branch": scan_data.get("branch", "main"),
+                        "commit_sha": scan_data.get("commit_sha"),
                         "timestamp": scan_data.get("timestamp"),
                         "vuln_count": scan_data.get("summary", {}).get("total_vulnerabilities", 0),
                         "rem_count": scan_data.get("summary", {}).get("remediations_generated", 0),
@@ -79,6 +81,28 @@ class ResultService:
                 os.remove(temp_path)
 
     def delete_scan(self, scan_id: str):
+        # 1. Fetch metadata to find linked resources (archive, vectors)
+        scan_data = self.get_scan(scan_id)
+        
+        # 2. Delete Source Archive
+        if scan_data and "archive_key" in scan_data:
+            archive_key = scan_data["archive_key"]
+            try:
+                self.storage.delete_file(archive_key)
+                logger.info(f"Deleted source archive: {archive_key}")
+            except Exception as e:
+                logger.warning(f"Failed to delete archive {archive_key}: {e}")
+                
+        # 3. Delete Vectors
+        try:
+            # Import here to avoid potential circular header issues if any
+            from ..vector.store import get_vector_store
+            vector_store = get_vector_store()
+            vector_store.delete_scan(scan_id)
+        except Exception as e:
+             logger.warning(f"Failed to clean up vectors for {scan_id}: {e}")
+
+        # 4. Delete Result JSON
         key = f"scans/{scan_id}.json"
         self.storage.delete_file(key)
         logger.info(f"Deleted scan result: {key}")

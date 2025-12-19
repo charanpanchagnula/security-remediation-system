@@ -1,9 +1,9 @@
-import { SignUp } from "@clerk/nextjs";
+import SignUpClient from "./SignUpClient";
+
+export function generateStaticParams() {
+    return [{ rest: [] }];
+}
 
 export default function Page() {
-    return (
-        <div className="flex items-center justify-center min-h-screen bg-gray-900">
-            <SignUp />
-        </div>
-    );
+    return <SignUpClient />;
 }

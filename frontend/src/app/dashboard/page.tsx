@@ -1,13 +1,22 @@
 "use client";
 
-import { useUser, UserButton } from "@clerk/nextjs";
+import { useUser, UserButton } from "@clerk/clerk-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 import { Shield, ArrowRight, LayoutDashboard, User } from "lucide-react";
 
 export default function DashboardWelcome() {
-    const { user, isLoaded } = useUser();
+    const { user, isLoaded, isSignedIn } = useUser();
+    const router = useRouter();
 
-    if (!isLoaded) {
+    useEffect(() => {
+        if (isLoaded && !isSignedIn) {
+            router.push("/sign-in");
+        }
+    }, [isLoaded, isSignedIn, router]);
+
+    if (!isLoaded || !isSignedIn) {
         return <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
         </div>;
@@ -24,7 +33,10 @@ export default function DashboardWelcome() {
                             Remediation Intelligence
                         </span>
                     </Link>
-                    <div>
+                    <div className="flex items-center gap-4">
+                        <div className="text-sm text-gray-500">
+                            {user?.firstName ? `Hi, ${user.firstName}` : "Welcome"}
+                        </div>
                         <UserButton afterSignOutUrl="/" />
                     </div>
                 </div>

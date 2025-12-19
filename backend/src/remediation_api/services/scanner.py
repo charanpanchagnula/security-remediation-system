@@ -56,6 +56,7 @@ class ScannerService:
                 vulnerabilities = self._run_checkov(extract_dir)
             elif scanner_type == "trivy":
                 vulnerabilities = self._run_trivy(extract_dir)
+
             
             return ScanResult(
                 scan_id=scan_id,
@@ -65,22 +66,37 @@ class ScannerService:
             )
 
     def _run_semgrep(self, target_dir: Path) -> List[Vulnerability]:
+        # Ensure rules path is absolute
+        # rules dir is in the same directory as 'src' (app root)
+        # In Docker this is /app/backend/rules
+        rules_path = Path("/app/backend/rules")
+        if not rules_path.exists():
+            # Fallback for local dev
+            rules_path = Path(__file__).parent.parent.parent.parent / "rules"
+            
         cmd = [
             "semgrep", 
             "scan", 
-            "--config", "p/security-audit",
-            "--config", "p/secrets",
+            "--config", "p/default", # Standard security rules from registry
+            "--config", "rules",     # Custom MCP rules from local dir
             "--json", 
             str(target_dir)
         ]
         
+        # Add context of where we are running
+        logger.info(f"Semgrep rules path: {rules_path.absolute()}")
         logger.info(f"Running Semgrep command: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(rules_path.parent))
         logger.info(f"Semgrep return code: {result.returncode}")
+        
         vulnerabilities = []
         
         if result.returncode in [0, 1]:
             try:
+                if not result.stdout.strip():
+                    logger.warning("Semgrep returned empty stdout")
+                    return []
                 output = json.loads(result.stdout)
                 results = output.get("results", [])
                 
@@ -88,6 +104,15 @@ class ScannerService:
                     path_str = item.get("path", "")
                     start_line = item.get("start", {}).get("line", 0)
                     end_line = item.get("end", {}).get("line", 0)
+                    
+                    # Handle absolute paths from Semgrep
+                    if os.path.isabs(path_str):
+                        try:
+                            rel_path = Path(path_str).relative_to(target_dir)
+                            path_str = str(rel_path)
+                        except ValueError:
+                            # Not relative to target_dir, keep as is (unlikely in this context)
+                            pass
                     
                     full_path = target_dir / path_str
                     context = self._read_context(full_path, start_line, end_line)
@@ -132,6 +157,19 @@ class ScannerService:
                     start_line = check.get("file_line_range", [0, 0])[0]
                     end_line = check.get("file_line_range", [0, 0])[1]
                     
+                    # Checkov might return absolute paths
+                    if os.path.isabs(path_str):
+                        try:
+                            # Checkov often prefixes with / even if relative, verify against target_dir
+                            if str(target_dir) in path_str:
+                                rel_path = Path(path_str).relative_to(target_dir)
+                                path_str = str(rel_path)
+                            else:
+                                # Sometimes checkov just gives /file.py
+                                path_str = path_str.lstrip("/")
+                        except ValueError:
+                            pass
+
                     # Read context manually
                     full_path = target_dir / path_str
                     context = self._read_context(full_path, start_line, end_line)
@@ -180,6 +218,11 @@ class ScannerService:
             
             for res in results:
                 target_file = res.get("Target", "unknown")
+                if os.path.isabs(target_file):
+                    try:
+                        target_file = str(Path(target_file).relative_to(target_dir))
+                    except ValueError:
+                        pass
                 # Handle Vulnerabilities (SCA)
                 vulns = res.get("Vulnerabilities", [])
                 for v in vulns:
@@ -215,5 +258,7 @@ class ScannerService:
             logger.debug(f"Trivy stdout: {result.stdout}")
             
         return vulnerabilities
+
+
 
 scanner_service = ScannerService()

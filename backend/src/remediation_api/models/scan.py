@@ -32,5 +32,7 @@ class Vulnerability(BaseModel):
 class ScanResult(BaseModel):
     scan_id: str
     repo_url: str
+    branch: Optional[str] = "main"
+    commit_sha: Optional[str] = None
     timestamp: str
     vulnerabilities: List[Vulnerability]

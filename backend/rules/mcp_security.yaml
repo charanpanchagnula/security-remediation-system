@@ -1,0 +1,191 @@
+rules:
+  - id: python.mcp.security.dangerous-subprocess
+    languages:
+      - python
+    message: |
+      Detected subprocess usage within an MCP tool definition.
+      This allows the tool to execute arbitrary system commands, which can lead to
+      Remote Code Execution (RCE) if input is not strictly validated.
+      Avoid using subprocess in tools exposed to LLMs unless absolutely necessary and sandboxed.
+    severity: ERROR
+    patterns:
+      - pattern-inside: |
+          @mcp.tool()
+          def $FUNC(...):
+            ...
+      - pattern-either:
+          - pattern: subprocess.run(...)
+          - pattern: subprocess.call(...)
+          - pattern: subprocess.Popen(...)
+          - pattern: os.system(...)
+          - pattern: os.popen(...)
+    metadata:
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+      owasp: "A03:2021 - Injection"
+      references:
+        - https://docs.python.org/3/library/subprocess.html#security-considerations
+
+  - id: python.mcp.security.prompt-injection-risk
+    languages:
+      - python
+    message: |
+      Potential Prompt Injection detected in MCP tool Docstring or assignment.
+      The string contains suspicious keywords often used to jailbreak or manipulate LLMs.
+    severity: WARNING
+    patterns:
+      - pattern-either:
+          - pattern: |
+              @mcp.tool()
+              def $FUNC(...):
+                  $STR
+          - pattern: $FUNC.__doc__ = $STR
+          - pattern: |
+              def $FUNC(...):
+                  ...
+              $FUNC.description = $STR
+      - metavariable-regex:
+          metavariable: $STR
+          regex: "(?s)(?i).*(ignore previous instructions|system crash|important side effect|absolute usage instructions|override|password|secret).*"
+    metadata:
+      cwe: "CWE-1050: Excessive Platform Resource Consumption within a Loop (closest for DoS/Injection)"
+      owasp: "LLM01:2023 - Prompt Injection"
+
+  - id: python.mcp.security.hardcoded-secrets
+    languages:
+      - python
+    message: |
+      Hardcoded secret or token detected in FastMCP initialization.
+      Secrets should be loaded from environment variables or a secure vault, not hardcoded in source.
+    severity: ERROR
+    patterns:
+      - pattern: |
+          FastMCP(..., $KEY="...", ...)
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: (api_key|token|secret|password|auth)
+    metadata:
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+      owasp: "A07:2021 - Identification and Authentication Failures"
+
+  - id: python.mcp.security.missing-validation
+    languages:
+      - python
+    message: |
+      MCP tool argument '$ARG' is used directly in a sensitive operation without visible validation.
+      Ensure all inputs from LLMs are validated against an allowlist or schema before use.
+    severity: WARNING
+    patterns:
+      - pattern-inside: |
+          @mcp.tool()
+          def $FUNC(..., $ARG: str, ...):
+              ...
+      - pattern-either:
+          - pattern: subprocess.run(..., $ARG, ...)
+          - pattern: open($ARG, ...)
+          - pattern: eval($ARG)
+          - pattern: exec($ARG)
+    metadata:
+      cwe: "CWE-20: Improper Input Validation"
+
+  - id: javascript.mcp.security.dangerous-exec
+    languages:
+      - javascript
+      - typescript
+    message: |
+      Detected dubious child_process usage within an MCP tool definition.
+      This allows the tool to execute arbitrary system commands.
+      Ensure inputs are strictly validated before passing to exec/spawn.
+    severity: ERROR
+    patterns:
+      - pattern-inside: |
+          $SERVER.tool(..., async ($ARGS) => { ... })
+      - pattern-either:
+          - pattern: child_process.exec(...)
+          - pattern: child_process.spawn(...)
+          - pattern: child_process.execSync(...)
+          - pattern: $CP.exec(...)
+          - pattern: $CP.spawn(...)
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+      owasp: "A03:2021 - Injection"
+
+  - id: go.mcp.security.dangerous-exec
+    languages:
+      - go
+    message: |
+      Detected dubious os/exec usage.
+      This allows the tool to execute arbitrary system commands.
+      Ensure inputs are strictly validated before passing to exec.Command.
+    severity: ERROR
+    patterns:
+      - pattern: exec.Command(...)
+      # Ideally restricted to inside an MCP tool handler, but pattern-inside for Go functions is tricky if they are anonymous
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+      owasp: "A03:2021 - Injection"
+
+  - id: python.mcp.security.path-traversal
+    languages:
+      - python
+    message: |
+      Potential Path Traversal in MCP tool.
+      The tool uses a file operation with an argument '$ARG' without visible sandbox validation.
+      Ensure paths are validated using `os.path.abspath` and checked against a safe directory.
+    severity: ERROR
+    patterns:
+      - pattern-inside: |
+          @mcp.tool()
+          def $FUNC(..., $ARG, ...):
+              ...
+      - pattern-either:
+          - pattern: open($ARG, ...)
+          - pattern: shutil.copy($ARG, ...)
+          - pattern: os.remove($ARG)
+      - pattern-not-inside: |
+          ...
+          if os.path.commonpath([...], $ARG):
+              ...
+          ...
+    metadata:
+      cwe: "CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"
+
+  - id: python.mcp.security.sensitive-env-exposure
+    languages:
+      - python
+    message: |
+      MCP tool potentially exposes sensitive environment variables.
+      Returning `os.environ` or broad environment access to an LLM is a major security risk.
+      Only return specific, necessary data.
+    severity: ERROR
+    patterns:
+      - pattern-inside: |
+          @mcp.tool()
+          def $FUNC(...):
+              ...
+      - pattern-either:
+          - pattern: return ..., os.environ, ...
+          - pattern: return os.environ
+    metadata:
+      cwe: "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+
+  - id: python.mcp.security.suspicious-docstring-tags
+    languages:
+      - python
+    message: |
+      Suspicious tags detected in MCP tool docstring or assignment.
+      Tags like '<IMPORTANT>' or 'sidenote' are often used in 'Tool Poisoning' attacks to hide instructions from users but execute them via the LLM.
+    severity: WARNING
+    patterns:
+      - pattern-either:
+          - pattern: |
+              @mcp.tool(...)
+              def $FUNC(...):
+                $STR
+          - pattern: $OBJ.__doc__ = $STR
+          - pattern: $OBJ.description = $STR
+      - metavariable-regex:
+          metavariable: $STR
+          regex: "(?s)(?i).*(<IMPORTANT>|\\[INST\\]|sidenote:|priority instruction).*"
+    metadata:
+      cwe: "CWE-1504: In-Band Protocol Negotiation"
+      owasp: "LLM01:2023 - Prompt Injection"

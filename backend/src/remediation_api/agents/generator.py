@@ -26,8 +26,8 @@ class GeneratorAgent:
             markdown=True
         )
 
-    def generate_fix(self, vuln: Vulnerability, previous_feedback: list[str] = None, github_link: str = None) -> RemediationResponse:
-        logger.info(f"Generating fix for {vuln.rule_id} (Feedback: {bool(previous_feedback)})")
+    def generate_fix(self, vuln: Vulnerability, previous_feedback: list[str] = None, github_link: str = None, reference_remediation: RemediationResponse = None) -> RemediationResponse:
+        logger.info(f"Generating fix for {vuln.rule_id} (Feedback: {bool(previous_feedback)}, Ref: {bool(reference_remediation)})")
         # Construct the prompt with context
         prompt_context = f"""
 INPUT CONTEXT:
@@ -43,6 +43,21 @@ INPUT CONTEXT:
 6. Semgrep Rule ID: {vuln.rule_id}
 7. Message: {vuln.message}
 """
+        if reference_remediation:
+            ref_content = reference_remediation.explanation
+            # Safely include code changes if available
+            ref_code = ""
+            if reference_remediation.code_changes:
+                ref_code = "\n".join([f"File: {c.file_path}\nCode:\n{c.new_code}" for c in reference_remediation.code_changes])
+            
+            prompt_context += f"""
+SIMILAR PAST FIX FOUND (REFERENCE ONLY):
+The following fix was used for a similar vulnerability in the past. Use it as a guide for style and approach, but adapt it strictly to the current code context.
+Explanation: {ref_content}
+Code Pattern:
+{ref_code}
+"""
+
         if previous_feedback:
             formatted_feedback = "\n".join(f"- {item}" for item in previous_feedback)
             prompt_context += f"\nPREVIOUS ATTEMPT FEEDBACK:\nThe previous fix was rejected. Please address the following:\n{formatted_feedback}\n"
