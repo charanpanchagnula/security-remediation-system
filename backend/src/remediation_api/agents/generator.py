@@ -8,6 +8,10 @@ logger = get_logger(__name__)
 
 class GeneratorAgent:
     def __init__(self):
+        """
+        Initializes the Generator Agent using the configured LLM provider (DeepSeek/OpenAI).
+        Defines the persona as a "Staff Security Engineer".
+        """
         self.agent = Agent(
             model=get_provider().get_model("deepseek-chat"),
             description="You are a Staff Security Engineer specializing in secure coding practices.",
@@ -27,11 +31,23 @@ class GeneratorAgent:
         )
 
     def generate_fix(self, vuln: Vulnerability, previous_feedback: list[str] = None, github_link: str = None, reference_remediation: RemediationResponse = None) -> RemediationResponse:
+        """
+        Generates a remediation for the given vulnerability.
+
+        Args:
+            vuln (Vulnerability): The vulnerability details.
+            previous_feedback (list[str], optional): Feedback from previous failed attempts (for self-correction).
+            github_link (str, optional): Link to the code on GitHub for context.
+            reference_remediation (RemediationResponse, optional): A similar past fix to use as a style guide (RAG).
+
+        Returns:
+            RemediationResponse: The generated fix including code changes and explanation.
+        """
         logger.info(f"Generating fix for {vuln.rule_id} (Feedback: {bool(previous_feedback)}, Ref: {bool(reference_remediation)})")
         # Construct the prompt with context
         prompt_context = f"""
 INPUT CONTEXT:
-1. Vulnerability Metadata: Rule={vuln.rule_id}, Severity={vuln.severity}
+1. Vulnerability Metadata: Rule={vuln.rule_id}, Scanner={vuln.scanner}, Severity={vuln.severity}
 2. File Location: {vuln.file_path} (Lines {vuln.start_line}-{vuln.end_line})
 3. GitHub Link: {github_link or "N/A"}
 4. Vulnerable Code:
@@ -40,7 +56,7 @@ INPUT CONTEXT:
    ```
 5. Surrounding Context:
    {vuln.surrounding_context}
-6. Semgrep Rule ID: {vuln.rule_id}
+6. Vulnerability Rule ID: {vuln.rule_id}
 7. Message: {vuln.message}
 """
         if reference_remediation:

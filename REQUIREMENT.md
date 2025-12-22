@@ -73,7 +73,7 @@ To build a **"Zero-Touch"** security remediation platform that empowers develope
 
 ### Backend
 *   **API:** FastAPI (Python 3.12)
-*   **Task Queue:** Custom AsyncIO Worker (Mock implementation for local dev)
+*   **Task Queue**: Custom AsyncIO Worker (Local File Queue / AWS SQS)
 *   **AI Orchestration:** Agno Framework (with DeepSeek/OpenAI models)
 *   **Scanner Tools:** Semgrep, Checkov, Trivy (CLI binaries installed in container)
 

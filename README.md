@@ -18,38 +18,37 @@ The system follows a modern, decoupled architecture designed for scalability and
 
 ```mermaid
 flowchart TD
-    subgraph Frontend_Group ["Frontend Application"]
-        UI["Dashboard UI<br/>(Next.js)"]
-        Auth["Clerk Auth"]
+    subgraph App_Context ["AWS App Runner (Single Container)"]
+        direction TB
+        UI["Frontend UI<br/>(Next.js Static Export)"]
+        API["FastAPI Server"]
+        Worker["Async Worker<br/>(Background Thread)"]
+        
+        UI <--> API
     end
 
-    subgraph Backend_Group ["Backend Services"]
-        API["API Gateway<br/>(FastAPI)"]
-        Orch["Remediation Orchestrator"]
-        
-        subgraph Scanners_Group ["Security Scanners"]
-            Semgrep["Semgrep (SAST)"]
-            Checkov["Checkov (IaC)"]
-            Trivy["Trivy (SCA)"]
-        end
-
-        subgraph Agents_Group ["AI Agent Core"]
-            Gen["Generator Agent<br/>(DeepSeek LLM)"]
-            Eval["Evaluator Agent<br/>(False Positive Detection)"]
-        end
-        
-        subgraph Storage_Group ["Persistence Layer"]
-            DB[("Results Store<br/>(JSON/DB)")]
-            Vector[("Vector Store<br/>(S3/LanceDB)")]
-        end
+    subgraph Infrastructure ["AWS Infrastructure"]
+        SQS["Amazon SQS<br/>(Job Queue)"]
+        S3_Src[("S3 Source<br/>(Artifacts)")]
+        S3_Res[("S3 Results<br/>(JSON + Offloaded Text)")]
+        S3_Vec[("S3 Vector Store<br/>(Embeddings)")]
     end
     
-    UI <--> API
-    API --> Orch
-    Orch --> Scanners_Group
-    Orch <--> Agents_Group
-    Agents_Group <--> Vector
-    Orch --> DB
+    subgraph Logic ["Core Logic"]
+        Orchestrator
+        Agents["AI Agents<br/>(Generator/Evaluator)"]
+    end
+
+    API -- "1. Enqueue Scan" --> SQS
+    Worker -- "2. Poll & Process" --> SQS
+    Worker --> Orchestrator
+    Orchestrator --> Agents
+    
+    Agents -- "3. Clone/Read" --> S3_Src
+    Agents -- "4. Store Output" --> S3_Res
+    
+    Agents -- "5. Semantic Search" --> S3_Vec
+    S3_Vec -. "6. Fetch Content" .-> S3_Res
 ```
 
 ---
@@ -69,7 +68,8 @@ flowchart TD
 ### 3.2 Backend Core
 *   **Runtime:** Python 3.11+, managed via `uv`.
 *   **Framework:** FastAPI for RESTful endpoints.
-*   **Asynchronous Processing:** Background worker pattern (asyncio) to handle long-running scans without blocking the API.
+*   **Asynchronous Processing:** Non-blocking background worker (asyncio + threads) ensures reliable SQS msg consumption without health check failures.
+*   **Ingestion:**
 *   **Ingestion:**
     *   Automatic cloning of private/public GitHub repositories.
     *   Support for specific commit SHAs.
@@ -96,7 +96,8 @@ The core innovation lies in the **Agno-based Multi-Agent System**:
 ### 3.4 Data & Vector Layer
 *   **Scan Results:** Stored as structured JSON files (simulating NoSQL documents) keyed by Scan ID.
 *   **Vector Store:**
-    *   **Implementation:** Abstracted interface supporting Local JSON (dev) and S3 (prod).
+    *   **Implementation:** AWS S3 Vectors with **S3 Metadata Offloading**.
+    *   **Logic:** Vectors are stored in the S3 Vector store, but large remediation texts are offloaded to a standard S3 bucket to bypass metadata size limits. The system automatically fetches this content during retrieval.
     *   **Usage:** Embeddings of vulnerability signatures are stored. When a new bug is found, the system searches for a "nearest neighbor" fix to speed up remediation and ensure consistency across the organization.
 
 ---
@@ -135,7 +136,29 @@ class RemediationResponse(BaseModel):
 
 ---
 
-## 7. Getting Started (Local Development)
+## 7. Operations & Maintenance
+
+### Deployment Automation
+We use a unified script to build, push, and deploy to AWS App Runner.
+```bash
+./create_and_deploy.sh
+```
+This script:
+1.  Builds the Docker image with a specific timestamp tag.
+2.  Pushes it to ECR.
+3.  Updates Terraform variables.
+4.  Runs `terraform apply` to roll out the new version.
+
+### State Reset (Clean Slate)
+To empty all S3 buckets (Source, Results, Vectors) and recreate the vector index:
+```bash
+uv run --with boto3 python reset_s3_state.py
+```
+**Warning:** This is destructive and irreversible.
+
+---
+
+## 8. Getting Started (Local Development)
 
 Follow these steps to run the system locally on your machine.
 

@@ -1,0 +1,7 @@
+environment = "dev"
+project_name = "security-remediation"
+vector_db_bucket_name = "security-remediation-guidance" # Change this manual bucket name
+openai_api_key = "sk-..."
+deepseek_api_key = "sk-..."
+clerk_secret_key = "sk_..."
+clerk_publishable_key = "pk_..."

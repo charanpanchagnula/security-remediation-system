@@ -12,7 +12,7 @@ router = APIRouter()
 class ScanRequest(BaseModel):
     repo_url: str
     commit_sha: Optional[str] = None
-    scanner_types: List[str] = ["semgrep", "checkov"]
+    scanner_types: List[str] = ["semgrep", "checkov", "trivy"]
 
 @router.post("/scan", response_model=Dict[str, Any])
 async def trigger_scan(request: ScanRequest):
@@ -26,7 +26,7 @@ async def trigger_scan(request: ScanRequest):
         logger.info(f"Scan ingested successfully: {result}")
         return result
     except Exception as e:
-        logger.error(f"Scan ingestion failed: {e}")
+        logger.error(f"Scan ingestion failed: {e}", exc_info=True)
         if "Failed to clone" in str(e):
              raise HTTPException(status_code=400, detail=f"Could not clone repository. Check URL or visibility. Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 import uuid
@@ -21,15 +22,31 @@ class Orchestrator:
         self.vector_store = get_vector_store()
         
     async def ingest_scan(self, repo_url: str, commit_sha: Optional[str] = None, scanner_types: List[str] = ["semgrep"]) -> Dict[str, Any]:
-        """Ingestion API: Downloads source, uploads to S3, queues job."""
+        """
+        API Entry Point: Initiates the scanning process.
         
-        # 1. Download & Archive
+        1. Clones and archives the repository.
+        2. Resolves the commit SHA.
+        3. Queues a scan job for the worker.
+        4. Creates an initial 'queued' result entry.
+
+        Args:
+            repo_url (str): The Git repository URL.
+            commit_sha (Optional[str]): Specific commit to scan. Defaults to HEAD.
+            scanner_types (List[str]): List of scanners to run (semgrep, checkov, etc.).
+
+        Returns:
+            Dict[str, Any]: A dict containing scan_id, status, and message_id.
+        """
+        
+        # Download and archive the repository content for scanning
+
         archive_key, resolved_sha = await github_service.download_and_store(repo_url, commit_sha)
         
         scan_id = str(uuid.uuid4())
         
-        # 2. Construct Message
-        # We pass the resolved SHA to the worker so it knows exactly what was scanned
+        # Construct the message payload
+        # Note: We pass the resolved SHA to ensure workers scan the exact same commit
         message = {
             "scan_id": scan_id,
             "repo_url": repo_url,
@@ -40,10 +57,9 @@ class Orchestrator:
             "timestamp": datetime.utcnow().isoformat()
         }
         
-        # 3. Send to Queue
+        # 3. Queue the job and save the initial 'queued' status
         msg_id = queue_service.send_message(message)
         
-        # 4. Save Initial Status
         initial_result = {
             "scan_id": scan_id,
             "repo_url": repo_url,
@@ -64,7 +80,17 @@ class Orchestrator:
         }
 
     async def process_scan_job(self, job: Dict[str, Any]):
-        """Worker Logic: Processes a scan job from the queue."""
+        """
+        Worker Entry Point: Processes a dequeued scan job.
+        
+        1. Updates status to 'in_progress'.
+        2. Runs selected scanners in parallel.
+        3. Aggregates vulnerabilities.
+        4. Saves the final result (without auto-remediation).
+
+        Args:
+            job (Dict[str, Any]): The job payload from the queue.
+        """
         scan_id = job["scan_id"]
         repo_url = job["repo_url"]
         commit_sha = job.get("commit_sha")
@@ -74,7 +100,7 @@ class Orchestrator:
         
         logger.info(f"Processing Scan {scan_id} with {scanner_types}")
         
-        # 0. Update Status to In Progress
+        # Update status to 'in_progress' and run scanners
         in_progress_result = {
             "scan_id": scan_id,
             "repo_url": repo_url,
@@ -90,28 +116,45 @@ class Orchestrator:
 
         all_vulnerabilities = []
         
-        # 1. Run Scanners
-        # 1. Run Scanners in Parallel
-        logger.info(f"Running scanners in parallel: {scanner_types}")
+        # Run all requested scanners in parallel
+        # Actually, we run sequentially to save memory, but now we reuse the workspace
         
-        # Create a list of awaitable tasks
-        scan_tasks = [
-            asyncio.to_thread(scanner_service.run_scan, archive_key, repo_url, scanner)
-            for scanner in scanner_types
-        ]
+        tmp_dir = None
+        results = []
         
-        # Execute in parallel
-        results = await asyncio.gather(*scan_tasks, return_exceptions=True)
+        try:
+            logger.info("Preparing workspace for scan...")
+            tmp_dir = await scanner_service.prepare_workspace(archive_key)
+            extract_dir = Path(tmp_dir.name) / "source"
+            
+            for scanner in scanner_types:
+                try:
+                    # Run scan on the prepared directory
+                    vulns = await scanner_service.scan_directory(extract_dir, repo_url, scanner)
+                    results.append(vulns)
+                except Exception as e:
+                    results.append(e)
+                    
+        except Exception as e:
+            logger.error(f"Failed to prepare workspace or run scans: {e}")
+            # If critical failure, ensures we don't crash the worker loop entirely?
+            # Or perhaps assume partial failure is handled below.
+            if not results:
+                 # If we didn't even start scanners, log it
+                 logger.error("No scans performed due to setup failure.")
+        finally:
+            if tmp_dir:
+                await asyncio.to_thread(tmp_dir.cleanup)
         
         for idx, res in enumerate(results):
             if isinstance(res, Exception):
                 logger.error(f"Scanner {scanner_types[idx]} failed: {res}")
             else:
-                all_vulnerabilities.extend(res.vulnerabilities)
+                all_vulnerabilities.extend(res)
             
         logger.info(f"Found {len(all_vulnerabilities)} vulnerabilities in Scan {scan_id}.")
         
-        # 2. Save Results (WITHOUT REMEDIATION)
+        # Save the final scan results (remediation is triggered on-demand later)
         final_result = {
             "scan_id": scan_id,
             "repo_url": repo_url,
@@ -133,7 +176,22 @@ class Orchestrator:
         logger.info(f"Scan {scan_id} complete. Results saved (No auto-remediation).")
 
     async def remediate_vulnerability(self, scan_id: str, vuln_id: str) -> Optional[RemediationResponse]:
-        """On-Demand: Generates a remediation for a specific vulnerability."""
+        """
+        On-Demand Remediation: Triggers the Agentic Loop for a single finding.
+        
+        1. Fetches the scan result.
+        2. Identifies the target vulnerability.
+        3. Checks for existing remediations (idempotency).
+        4. Calls _process_vulnerability to generate/retrieve a fix.
+        5. Updates the persistent result.
+
+        Args:
+            scan_id (str): The scan ID.
+            vuln_id (str): The specific vulnerability ID to fix.
+
+        Returns:
+            Optional[RemediationResponse]: The generated or retrieved remediation.
+        """
         scan_data = result_service.get_scan(scan_id)
         if not scan_data:
             raise ValueError("Scan not found")
@@ -147,7 +205,8 @@ class Orchestrator:
         # Check if already exists
         remediations = scan_data.get("remediations", [])
         # If exists, return it (idempotent)
-        existing = next((r for r in remediations if r.get("vulnerability_id") == target_vuln["rule_id"]), None)
+        # Fix: Check against vulnerability_id (UUID), not rule_id
+        existing = next((r for r in remediations if r.get("vulnerability_id") == target_vuln["id"]), None)
         if existing:
             return RemediationResponse(**existing)
             
@@ -168,7 +227,13 @@ class Orchestrator:
         return rem_response
         
     async def batch_remediate_scan(self, scan_id: str):
-        """On-Demand: Generates remediations for ALL missing ones."""
+        """
+        On-Demand Batch Remediation: Generates fixes for ALL vulnerabilities in a scan.
+        Skips vulnerabilities that already have a remediation.
+
+        Args:
+            scan_id (str): The scan ID to process.
+        """
         scan_data = result_service.get_scan(scan_id)
         if not scan_data:
             return
@@ -209,6 +274,23 @@ class Orchestrator:
             result_service.save_scan_result(scan_id, scan_data)
 
     async def _process_vulnerability(self, vuln: Vulnerability, repo_url: str, scan_id: str, git_ref: str = "main") -> Optional[RemediationResponse]:
+        """
+        The Core Agentic Loop:
+        1. RAG: Searches Vector Store for similar past fixes.
+        2. Evaluate: If a hit is found, evaluates its applicability.
+        3. Generate: If no hit or rejected, uses LLM to generate a new fix.
+        4. Verify: Evaluates the generated fix.
+        5. Learn: Stores high-confidence fixes back into Vector Store.
+
+        Args:
+            vuln (Vulnerability): The vulnerability to fix.
+            repo_url (str): The repo URL (for context).
+            scan_id (str): The scan ID.
+            git_ref (str): Commit SHA or branch for permalinks.
+
+        Returns:
+            Optional[RemediationResponse]: The approved remediation, or None if failed.
+        """
         # Construct GitHub Link
         # Use provided git_ref (commit_sha or branch)
         github_link = None
@@ -217,18 +299,27 @@ class Orchestrator:
             # Use the exact git_ref for permalinks
             github_link = f"{clean_repo}/blob/{git_ref}/{vuln.file_path.lstrip('/')}#L{vuln.start_line}-L{vuln.end_line}"
 
-        # 1. Search Vector Store (Pass text directly, Agno handles embedding)
-        # Construct a rich query
+        # 1. Search Vector Store for relevant context
+        # Agno/LanceDB handles the embedding generation internally
         query_text = f"{vuln.rule_id} {vuln.message}\n{vuln.code_snippet}"
         
-        hits = await asyncio.to_thread(self.vector_store.search, query_text)
+        logger.info(f"🔍 [Vector Search] Searching for context. Rule: {vuln.rule_id}")
+        logger.debug(f"🔍 [Vector Search] Query: {query_text[:100]}...")
+
+        hits = await asyncio.to_thread(
+            self.vector_store.search, 
+            query_text, 
+            limit=1, 
+            filters={"scanner": vuln.scanner}
+        )
         
         reference_remediation = None
         feedback = None
         
         if hits:
             best_hit = hits[0] # List[Dict]
-            logger.info(f"Agno Knowledge Hit: Score {best_hit['score']}")
+            logger.info(f"✅ [Vector Search] Hit Found! Score: {best_hit['score']}")
+            logger.info(f"✅ [Vector Search] Cached Remediation ID: {best_hit.get('rule_id')}")
             
             try:
                 # Deserialize the stored JSON back to object
@@ -238,7 +329,8 @@ class Orchestrator:
                 # Check Score (Using Agno/LanceDB score. NOTE: LanceDB is distance, Agno might invert it.
                 # For now, let's rely on success of retrieval implying relevance, but check Evaluator.)
                 
-                # Evaluate if the retrieved fix is completely valid AS IS
+                # Evaluate if the retrieved fix is completely valid for the current context
+
                 evaluation = await asyncio.to_thread(
                     evaluator_agent.evaluate_fix, vuln, existing_rem
                 )
@@ -247,6 +339,8 @@ class Orchestrator:
 
                 if evaluation.confidence_score >= settings.CONFIDENCE_THRESHOLD:
                     logger.info(f"Vector guidance sufficient. Returning cached.")
+                    # CRITICAL: Overwrite ID to match current vulnerability UUID for UI mapping
+                    existing_rem.vulnerability_id = vuln.id
                     return existing_rem
                 else:
                     logger.info(f"Vector guidance insufficient. Proceeding to generation with context.")
@@ -255,7 +349,7 @@ class Orchestrator:
             except Exception as e:
                 logger.error(f"Failed to process vector hit: {e}")
         
-        # 3. Generator Loop
+        # 2. Generator Loop: Agentic Cycle of Generate -> Evaluate -> Refine
         for attempt in range(settings.MAX_RETRIES + 1):
             try:
                 # Generator (Run in thread)
@@ -282,8 +376,12 @@ class Orchestrator:
                         vuln.rule_id,
                         remediation.model_dump_json(),
                         vuln.code_snippet,
-                        scan_id
+                        scan_id,
+                        vuln.scanner
                     )
+                    # CRITICAL: Overwrite ID to match current vulnerability UUID for UI mapping
+                    # (Generator might produce random/rule ID)
+                    remediation.vulnerability_id = vuln.id
                     return remediation
                 
                 feedback = evaluation.feedback # Feedback loop

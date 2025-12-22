@@ -67,7 +67,7 @@ export default function ScanClient() {
         );
     }
 
-    const remediation = selectedVuln ? scan.remediations?.find(r => r.vulnerability_id === selectedVuln.rule_id) : null;
+    const remediation = selectedVuln ? scan.remediations?.find(r => r.vulnerability_id === selectedVuln.id) : null;
 
     const handleBatchRemediate = async () => {
         if (!confirm("This will trigger AI remediation for all vulnerabilities. Continue?")) return;
@@ -198,7 +198,7 @@ export default function ScanClient() {
                                     <p className="text-xs text-gray-500 mt-1 truncate">
                                         {vuln.file_path}:{vuln.start_line}
                                     </p>
-                                    {scan?.remediations?.some(r => r.vulnerability_id === vuln.rule_id) && (
+                                    {scan?.remediations?.some(r => r.vulnerability_id === vuln.id) && (
                                         <div className="mt-2 flex items-center text-xs text-green-600 font-medium">
                                             <CheckCircle className="h-3 w-3 mr-1" />
                                             Fix Available

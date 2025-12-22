@@ -18,73 +18,97 @@ class GitHubService:
         self.work_dir.mkdir(parents=True, exist_ok=True)
 
     def _parse_repo_url(self, repo_url: str):
-        """Extracts owner and repo from URL."""
+        """
+        Extracts owner and repo name from a standard GitHub URL.
+
+        Args:
+            repo_url (str): The full GitHub URL (e.g., https://github.com/owner/repo).
+
+        Returns:
+            tuple[str, str]: (owner, repo_name)
+        """
         # Handles https://github.com/owner/repo
         parts = repo_url.rstrip("/").split("/")
         return parts[-2], parts[-1]
 
     async def download_and_store(self, repo_url: str, commit_sha: Optional[str] = None) -> tuple[str, str]:
+        """
+        Downloads a repository via GitHub API as a tarball, and uploads it to storage.
+        
+        Args:
+            repo_url (str): The GitHub repository URL.
+            commit_sha (Optional[str]): The specific commit to checkout. If None, uses default branch (via API).
+
+        Returns:
+            tuple[str, str]: (storage_key, resolved_commit_sha)
+        """
+        import httpx
+        
         owner, repo = self._parse_repo_url(repo_url)
         
         # Unique ID for this scan/download op
         scan_id = str(uuid.uuid4())
-        clone_dir = self.work_dir / scan_id / "source"
-        
-        # Ensure parent dir exists
-        clone_dir.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Construct Git Command
-        # Use simple clone with depth 1 if no commit_sha, otherwise fetch specific
-        try:
-            if commit_sha:
-                # Clone full (or partial) then checkout
-                # Optimization: clone specific branch? Hard if commit_sha is just hash.
-                # Safer: clone, then checkout.
-                logger.info(f"Cloning {repo_url} (checking out {commit_sha})...")
-                subprocess.run(["git", "clone", repo_url, str(clone_dir)], check=True, capture_output=True)
-                subprocess.run(["git", "checkout", commit_sha], cwd=clone_dir, check=True, capture_output=True)
-            else:
-                # Shallow clone default branch
-                logger.info(f"Cloning {repo_url} (default branch)...")
-                subprocess.run(["git", "clone", "--depth", "1", repo_url, str(clone_dir)], check=True, capture_output=True)
-                
-            # Resolve the actual commit SHA
-            # This is critical for generating permalinks in the UI
-            result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=clone_dir, check=True, capture_output=True)
-            resolved_sha = result.stdout.decode().strip()
-            logger.info(f"Resolved commit SHA: {resolved_sha}")
-
-            # Remove .git directory to save space/time and avoid scanning it
-            git_dir = clone_dir / ".git"
-            if git_dir.exists():
-                shutil.rmtree(git_dir)
-                
-        except subprocess.CalledProcessError as e:
-            error_msg = e.stderr.decode() if e.stderr else str(e)
-            logger.error(f"Git clone failed: {error_msg}")
-            # Cleanup
-            if clone_dir.parent.exists():
-                shutil.rmtree(clone_dir.parent)
-            raise Exception(f"Failed to clone repository: {error_msg}")
-
-        # Create .tar.gz
         archive_name = f"{owner}-{repo}-{scan_id}.tar.gz"
         archive_path = self.work_dir / archive_name
         
-        with tarfile.open(archive_path, "w:gz") as tar:
-            tar.add(clone_dir, arcname=".")
+        # Determine the ref (SHA or main/master)
+        # If commit_sha is provided, use it. Otherwise, we can ask API for default branch or just use 'main' as fallback
+        # Better: Use the API to get the default branch SHA first if not provided, to ensure we have a SHA to return.
+        
+        headers = {
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "Security-Remediation-System"
+        }
+        if settings.GITHUB_TOKEN:
+            headers["Authorization"] = f"token {settings.GITHUB_TOKEN}"
+
+        resolved_sha = commit_sha
+
+        async with httpx.AsyncClient(headers=headers, follow_redirects=True) as client:
+            # 1. Resolve SHA if missing
+            if not resolved_sha:
+                try:
+                    logger.info(f"Resolving default branch for {owner}/{repo}")
+                    resp = await client.get(f"https://api.github.com/repos/{owner}/{repo}")
+                    resp.raise_for_status()
+                    default_branch = resp.json().get("default_branch", "main")
+                    
+                    # Get SHA of default branch
+                    resp_ref = await client.get(f"https://api.github.com/repos/{owner}/{repo}/commits/{default_branch}")
+                    resp_ref.raise_for_status()
+                    resolved_sha = resp_ref.json()["sha"]
+                    logger.info(f"Resolved default branch '{default_branch}' to {resolved_sha}")
+                except Exception as e:
+                    logger.error(f"Failed to resolve default branch: {e}")
+                    raise Exception(f"Failed to get repository info: {str(e)}")
+
+            # 2. Download Tarball
+            # API: GET /repos/{owner}/{repo}/tarball/{ref}
+            download_url = f"https://api.github.com/repos/{owner}/{repo}/tarball/{resolved_sha}"
+            logger.info(f"Downloading source from {download_url}...")
             
-        # Upload to storage
+            try:
+                async with client.stream("GET", download_url) as response:
+                    response.raise_for_status()
+                    with open(archive_path, "wb") as f:
+                        async for chunk in response.aiter_bytes():
+                            f.write(chunk)
+            except Exception as e:
+                logger.error(f"Failed to download repository: {e}")
+                # Analyze error (e.g., 404, 401)
+                raise Exception(f"Failed to download repository archive: {str(e)}")
+
+        # 3. Upload to storage (S3)
+        # The storage service expects a path to a file
         storage_key = f"archives/{archive_name}"
         stored_path = self.storage.upload_file(str(archive_path), storage_key)
         logger.info(f"Repository stored at {stored_path}")
         
-        # Cleanup
+        # Cleanup local file
         try:
-            shutil.rmtree(clone_dir.parent)
             os.remove(archive_path)
         except Exception:
-            pass # Best effort cleanup
+            pass
             
         return storage_key, resolved_sha
 

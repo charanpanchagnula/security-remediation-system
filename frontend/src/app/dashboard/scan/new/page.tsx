@@ -22,9 +22,16 @@ export default function NewScanPage() {
             // Ideally we redirect to the scan details page if we had the ID, 
             // but triggerScan returns {scan_id, status}.
             router.push("/dashboard");
-        } catch (error) {
+        } catch (error: any) {
             console.error("Scan failed", error);
-            alert("Failed to trigger scan");
+            let errorMessage = "Failed to trigger scan";
+            if (error.response?.data?.detail) {
+                errorMessage += `: ${error.response.data.detail}`;
+            } else if (error.message) {
+                errorMessage += `: ${error.message}`;
+            }
+            alert(errorMessage);
+            console.error("Scan failed detailed:", error.response?.data || error);
         } finally {
             setIsSubmitting(false);
         }
