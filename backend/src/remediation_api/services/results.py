@@ -10,6 +10,10 @@ logger = get_logger(__name__)
 
 class ResultService:
     def __init__(self):
+        """
+        Initializes the ResultService with the appropriate storage backend.
+        Uses LocalStorageService for 'local' environments and S3StorageService for 'production'.
+        """
         # We need specific storage instances for results bucket if using S3
         if settings.APP_ENV == "local" or settings.APP_ENV == "local_mock":
             self.storage = LocalStorageService(base_dir=os.path.join(settings.WORK_DIR, "results"))
@@ -17,6 +21,16 @@ class ResultService:
             self.storage = S3StorageService(bucket=settings.S3_RESULTS_BUCKET_NAME)
         
     def save_scan_result(self, scan_id: str, data: dict) -> str:
+        """
+        Saves the scan result JSON to storage.
+
+        Args:
+            scan_id (str): The unique ID of the scan.
+            data (dict): The complete scan data dictionary.
+
+        Returns:
+            str: The URI (local path or s3://) where the result was saved.
+        """
         # Save as JSON
         key = f"scans/{scan_id}.json"
         
@@ -65,6 +79,15 @@ class ResultService:
         return scans
 
     def get_scan(self, scan_id: str) -> dict:
+        """
+        Retrieves a specific scan result by ID.
+
+        Args:
+            scan_id (str): The ID of the scan to fetch.
+
+        Returns:
+            dict: The scan result data, or None if not found or failed to fetch.
+        """
         key = f"scans/{scan_id}.json"
         with tempfile.NamedTemporaryFile(delete=False) as f:
             temp_path = f.name
@@ -81,6 +104,12 @@ class ResultService:
                 os.remove(temp_path)
 
     def delete_scan(self, scan_id: str):
+        """
+        Hard deletes a scan and its associated resources (artifacts, vector entries, result JSON).
+
+        Args:
+            scan_id (str): The ID of the scan to delete.
+        """
         # 1. Fetch metadata to find linked resources (archive, vectors)
         scan_data = self.get_scan(scan_id)
         

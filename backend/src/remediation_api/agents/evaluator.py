@@ -8,6 +8,10 @@ logger = get_logger(__name__)
 
 class EvaluatorAgent:
     def __init__(self):
+        """
+        Initializes the Evaluator Agent using the configured LLM provider.
+        Defines the persona as a "Lead AppSec Reviewer".
+        """
         self.agent = Agent(
             model=get_provider().get_model("deepseek-chat"),
             description="You are a Lead AppSec Reviewer. You are the gatekeeper for code quality and security.",
@@ -27,17 +31,27 @@ class EvaluatorAgent:
         )
 
     def evaluate_fix(self, vuln: Vulnerability, remediation: RemediationResponse) -> EvaluationResult:
+        """
+        Evaluates a proposed remediation for correctness, safety, and completeness.
+
+        Args:
+            vuln (Vulnerability): The original vulnerability.
+            remediation (RemediationResponse): The proposed fix.
+
+        Returns:
+            EvaluationResult: The evaluation outcome (confidence score, feedback).
+        """
         logger.info(f"Evaluating fix for {vuln.rule_id} (Summary: {remediation.summary[:50]}...)")
         prompt_context = f"""
 INPUTS:
-1. Original Vulnerability: {vuln.message} (Rule: {vuln.rule_id})
+1. Original Vulnerability: {vuln.message} (Rule: {vuln.rule_id}, Scanner: {vuln.scanner})
 2. Proposed Fix Summary: {remediation.summary}
 3. Proposed Changes:
    {remediation.code_changes}
 4. Explanation: {remediation.explanation}
 
 EVALUATION CRITERIA:
-1. EFFECTIVENESS: Does this actually close the specific vulnerability?
+1. EFFECTIVENESS: Does this actually remediate the specific vulnerability?
 2. SAFETY: Does this fix introduce a regression or syntax error?
 3. SIDE EFFECTS: Does strict input validation here break legitimate use cases?
 """

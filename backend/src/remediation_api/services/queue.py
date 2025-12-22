@@ -38,6 +38,15 @@ class LocalQueueService(QueueService):
         self.queue_dir.mkdir(parents=True, exist_ok=True)
 
     def send_message(self, message_body: Dict[str, Any]) -> str:
+        """
+        Writes a message to a JSON file in the queue directory.
+
+        Args:
+            message_body (Dict[str, Any]): The message payload.
+
+        Returns:
+            str: The unique ID of the created message.
+        """
         msg_id = str(uuid.uuid4())
         file_path = self.queue_dir / f"{msg_id}.json"
         with open(file_path, "w") as f:
@@ -46,6 +55,16 @@ class LocalQueueService(QueueService):
         return msg_id
 
     def receive_messages(self, max_messages: int = 1) -> List[QueueMessage]:
+        """
+        Reads pending JSON message files from the queue directory.
+        Simulates FIFO by sorting by file modification time.
+
+        Args:
+            max_messages (int): The maximum number of messages to retrieve.
+
+        Returns:
+            List[QueueMessage]: A list of retrieved messages.
+        """
         # Simple FIFO-ish: list files, pick oldest
         files = glob.glob(str(self.queue_dir / "*.json"))
         # Sort by creation time (simulated by filename/system)
@@ -63,6 +82,12 @@ class LocalQueueService(QueueService):
         return messages
 
     def delete_message(self, receipt_handle: str):
+        """
+        Deletes the message file (simulating SQS delete).
+
+        Args:
+            receipt_handle (str): The file path of the message to delete.
+        """
         if os.path.exists(receipt_handle):
             os.remove(receipt_handle)
 
@@ -72,6 +97,15 @@ class SQSQueueService(QueueService):
         self.queue_url = settings.SQS_QUEUE_URL
 
     def send_message(self, message_body: Dict[str, Any]) -> str:
+        """
+        Sends a message to the configured AWS SQS queue.
+
+        Args:
+            message_body (Dict[str, Any]): The message payload.
+
+        Returns:
+            str: The SQS MessageId.
+        """
         response = self.sqs.send_message(
             QueueUrl=self.queue_url,
             MessageBody=json.dumps(message_body)
@@ -82,6 +116,15 @@ class SQSQueueService(QueueService):
         return msg_id
 
     def receive_messages(self, max_messages: int = 1) -> List[QueueMessage]:
+        """
+        Polls the AWS SQS queue for new messages.
+
+        Args:
+            max_messages (int): The maximum number of messages to retrieve.
+
+        Returns:
+            List[QueueMessage]: A list of retrieved messages.
+        """
         response = self.sqs.receive_message(
             QueueUrl=self.queue_url,
             MaxNumberOfMessages=max_messages,
@@ -101,6 +144,12 @@ class SQSQueueService(QueueService):
         return messages
 
     def delete_message(self, receipt_handle: str):
+        """
+        Deletes a message from the AWS SQS queue using its receipt handle.
+
+        Args:
+            receipt_handle (str): The receipt handle provided when receiving the message.
+        """
         self.sqs.delete_message(
             QueueUrl=self.queue_url,
             ReceiptHandle=receipt_handle

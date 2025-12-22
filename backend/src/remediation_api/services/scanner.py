@@ -1,5 +1,5 @@
 import json
-import subprocess
+import asyncio
 import os
 import tarfile
 import tempfile
@@ -18,7 +18,18 @@ class ScannerService:
         self.storage = get_storage()
 
     def _read_context(self, file_path: Path, start_line: int, end_line: int, context_lines: int = 5) -> str:
-        """Reads surrounding lines of code."""
+        """
+        Reads lines of code surrounding a vulnerability from the source file.
+
+        Args:
+            file_path (Path): Absolute path to the source file.
+            start_line (int): The starting line number (1-indexed).
+            end_line (int): The ending line number (1-indexed).
+            context_lines (int, optional): Number of lines to include before/after. Defaults to 5.
+
+        Returns:
+            str: The concatenated code lines.
+        """
         try:
             with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                 lines = f.readlines()
@@ -31,73 +42,131 @@ class ScannerService:
         except Exception:
             return ""
 
-    def run_scan(self, archive_key: str, repo_url: str, scanner_type: str = "semgrep") -> ScanResult:
-        scan_id = str(uuid.uuid4())
-        logger.info(f"Starting {scanner_type} scan (ID: {scan_id}) on {archive_key}")
-        
-        with tempfile.TemporaryDirectory() as temp_dir:
-            work_dir = Path(temp_dir)
+    async def prepare_workspace(self, archive_key: str) -> tempfile.TemporaryDirectory:
+        """
+        Prepares the workspace by downloading and extracting the archive.
+        Returns the TemporaryDirectory object (context manager).
+        The extracted source will be in {tmp.name}/source
+        """
+        def _setup():
+            tmp = tempfile.TemporaryDirectory()
+            work_dir = Path(tmp.name)
             archive_path = work_dir / "source.tar.gz"
             extract_dir = work_dir / "source"
             extract_dir.mkdir()
             
             # Download archive
+            logger.info(f"Downloading archive {archive_key} to {archive_path}")
             self.storage.download_file(archive_key, str(archive_path))
+            logger.info(f"Download complete. Size: {archive_path.stat().st_size} bytes")
             
             # Extract
+            logger.info(f"Extracting archive to {extract_dir}")
             with tarfile.open(archive_path, "r:gz") as tar:
                 tar.extractall(extract_dir)
-            
-            vulnerabilities = []
-            
-            if scanner_type == "semgrep":
-                vulnerabilities = self._run_semgrep(extract_dir)
-            elif scanner_type == "checkov":
-                vulnerabilities = self._run_checkov(extract_dir)
-            elif scanner_type == "trivy":
-                vulnerabilities = self._run_trivy(extract_dir)
+            logger.info("Extraction complete")
+            return tmp
 
+        return await asyncio.to_thread(_setup)
+
+    async def scan_directory(self, target_dir: Path, repo_url: str, scanner_type: str) -> List[Vulnerability]:
+        """
+        Runs a specific scanner on the target directory.
+        """
+        logger.info(f"Running {scanner_type} on {target_dir}")
+        try:
+            if scanner_type == "semgrep":
+                return await self._run_semgrep(target_dir)
+            elif scanner_type == "checkov":
+                return await self._run_checkov(target_dir)
+            elif scanner_type == "trivy":
+                return await self._run_trivy(target_dir)
+            else:
+                logger.warning(f"Unknown scanner type: {scanner_type}")
+                return []
+        except Exception as e:
+            logger.error(f"Scanner {scanner_type} failed: {e}", exc_info=True)
+            raise e
+
+    async def run_scan(self, archive_key: str, repo_url: str, scanner_type: str = "semgrep") -> ScanResult:
+        """
+        Legacy method for backward compatibility / single scan.
+        """
+        scan_id = str(uuid.uuid4())
+        logger.info(f"Starting {scanner_type} scan (ID: {scan_id}) on {archive_key}")
+        
+        tmp_dir = None
+        try:
+            tmp_dir = await self.prepare_workspace(archive_key)
+            extract_dir = Path(tmp_dir.name) / "source"
             
+            vulnerabilities = await self.scan_directory(extract_dir, repo_url, scanner_type)
+
             return ScanResult(
                 scan_id=scan_id,
                 repo_url=repo_url,
                 timestamp=datetime.utcnow().isoformat(),
                 vulnerabilities=vulnerabilities
             )
+            
+        except Exception as e:
+            logger.error(f"Scan failed: {e}", exc_info=True)
+            raise e
+        finally:
+            if tmp_dir:
+                await asyncio.to_thread(tmp_dir.cleanup)
 
-    def _run_semgrep(self, target_dir: Path) -> List[Vulnerability]:
-        # Ensure rules path is absolute
-        # rules dir is in the same directory as 'src' (app root)
-        # In Docker this is /app/backend/rules
+    async def _run_semgrep(self, target_dir: Path) -> List[Vulnerability]:
+        """
+        Executes Semgrep CLI on the target directory asynchronously.
+        """
         rules_path = Path("/app/backend/rules")
         if not rules_path.exists():
-            # Fallback for local dev
             rules_path = Path(__file__).parent.parent.parent.parent / "rules"
             
         cmd = [
             "semgrep", 
             "scan", 
-            "--config", "p/default", # Standard security rules from registry
-            "--config", "rules",     # Custom MCP rules from local dir
+            "--config", "p/default", 
+            "--config", "rules",     
             "--json", 
             str(target_dir)
         ]
         
-        # Add context of where we are running
-        logger.info(f"Semgrep rules path: {rules_path.absolute()}")
         logger.info(f"Running Semgrep command: {' '.join(cmd)}")
         
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(rules_path.parent))
-        logger.info(f"Semgrep return code: {result.returncode}")
+        # Use asyncio subprocess
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(rules_path.parent)
+        )
+        
+        try:
+            # Add timeout to communicate
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
+        except asyncio.TimeoutError:
+            logger.error(f"Semgrep timed out after 300s")
+            try:
+                process.kill()
+            except Exception:
+                pass
+            return []
+            
+        stdout_text = stdout.decode()
+        stderr_text = stderr.decode()
+        
+        logger.info(f"Semgrep return code: {process.returncode}")
         
         vulnerabilities = []
         
-        if result.returncode in [0, 1]:
+        if process.returncode in [0, 1]:
             try:
-                if not result.stdout.strip():
+                if not stdout_text.strip():
                     logger.warning("Semgrep returned empty stdout")
                     return []
-                output = json.loads(result.stdout)
+                output = json.loads(stdout_text)
                 results = output.get("results", [])
                 
                 for item in results:
@@ -105,13 +174,11 @@ class ScannerService:
                     start_line = item.get("start", {}).get("line", 0)
                     end_line = item.get("end", {}).get("line", 0)
                     
-                    # Handle absolute paths from Semgrep
                     if os.path.isabs(path_str):
                         try:
                             rel_path = Path(path_str).relative_to(target_dir)
                             path_str = str(rel_path)
                         except ValueError:
-                            # Not relative to target_dir, keep as is (unlikely in this context)
                             pass
                     
                     full_path = target_dir / path_str
@@ -133,57 +200,71 @@ class ScannerService:
                     vulnerabilities.append(vuln)
             except json.JSONDecodeError:
                 logger.error("Failed to parse Semgrep JSON output")
-                logger.debug(f"Semgrep stderr: {result.stderr}")
+                logger.debug(f"Semgrep stderr: {stderr_text}")
+        else:
+            logger.error(f"Semgrep failed with code {process.returncode}: {stderr_text}")
+
         return vulnerabilities
 
-    def _run_checkov(self, target_dir: Path) -> List[Vulnerability]:
-        # Checkov recursive scan
+    async def _run_checkov(self, target_dir: Path) -> List[Vulnerability]:
+        """
+        Executes Checkov CLI for IaC scanning asynchronously.
+        """
         cmd = ["checkov", "-d", str(target_dir), "--output", "json", "--soft-fail"]
         
         logger.info(f"Running Checkov command: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
+        except asyncio.TimeoutError:
+            logger.error(f"Checkov timed out after 300s")
+            try:
+                process.kill()
+            except Exception:
+                pass
+            return []
+
+        stdout_text = stdout.decode()
+        
         vulnerabilities = []
         
         try:
-            # Checkov might return a single dict or a list of dicts (if multiple frameworks found)
-            output = json.loads(result.stdout)
+            output = json.loads(stdout_text)
             reports = output if isinstance(output, list) else [output]
             
             for report in reports:
-                # 'results' -> 'failed_checks'
                 failed_checks = report.get("results", {}).get("failed_checks", [])
                 for check in failed_checks:
-                    path_str = check.get("file_path", "").lstrip("/") # Checkov returns absolute-ish path starting with /
+                    path_str = check.get("file_path", "").lstrip("/") 
                     start_line = check.get("file_line_range", [0, 0])[0]
                     end_line = check.get("file_line_range", [0, 0])[1]
                     
-                    # Checkov might return absolute paths
                     if os.path.isabs(path_str):
                         try:
-                            # Checkov often prefixes with / even if relative, verify against target_dir
                             if str(target_dir) in path_str:
                                 rel_path = Path(path_str).relative_to(target_dir)
                                 path_str = str(rel_path)
                             else:
-                                # Sometimes checkov just gives /file.py
                                 path_str = path_str.lstrip("/")
                         except ValueError:
                             pass
 
-                    # Read context manually
                     full_path = target_dir / path_str
                     context = self._read_context(full_path, start_line, end_line)
                     
-                    # Code block in checkov is a list of lines with line numbers
                     code_block = check.get("code_block", [])
-                    snippet = "".join([line[1] for line in code_block]) # line is [line_num, line_content] checkov format? Usually [int, str]
-                    # Verify checkov code_block format: List[List[int, str]]
+                    snippet = "".join([line[1] for line in code_block])
                     
                     vuln = Vulnerability(
                         id=str(uuid.uuid4()),
                         rule_id=check.get("check_id"),
                         message=check.get("check_name", ""),
-                        severity="HIGH", # Checkov usually doesn't give severity in JSON unless enriched, mapping to HIGH default
+                        severity="HIGH", 
                         file_path=path_str,
                         start_line=start_line,
                         end_line=end_line,
@@ -195,25 +276,40 @@ class ScannerService:
                     vulnerabilities.append(vuln)
         except Exception as e:
             logger.error(f"Failed to parse Checkov output: {e}")
-            logger.debug(f"Checkov content (first 500 chars): {result.stdout[:500]}")
+            logger.debug(f"Checkov content (first 500 chars): {stdout_text[:500]}")
             
         return vulnerabilities
 
-    def _run_trivy(self, target_dir: Path) -> List[Vulnerability]:
-        """Runs Trivy FS scan for SCA and Misconfigurations."""
+    async def _run_trivy(self, target_dir: Path) -> List[Vulnerability]:
+        """Runs Trivy FS scan asynchronously."""
         cmd = ["trivy", "fs", str(target_dir), "--format", "json"]
         
         logger.info(f"Running Trivy command: {' '.join(cmd)}")
-        # Trivy writes to stdout by default with --format json
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
+        except asyncio.TimeoutError:
+            logger.error(f"Trivy timed out after 300s")
+            try:
+                process.kill()
+            except Exception:
+                pass
+            return []
+
+        stdout_text = stdout.decode()
+        
         vulnerabilities = []
 
-        if result.returncode != 0:
-            logger.error(f"Trivy failed: {result.stderr}")
-            # Trivy might still output JSON on failure (e.g. found vuln exit code), but we usually check stdout
+        if process.returncode != 0:
+            logger.error(f"Trivy failed: {stderr.decode()}")
         
         try:
-            output = json.loads(result.stdout)
+            output = json.loads(stdout_text)
             results = output.get("Results", [])
             
             for res in results:
@@ -223,7 +319,7 @@ class ScannerService:
                         target_file = str(Path(target_file).relative_to(target_dir))
                     except ValueError:
                         pass
-                # Handle Vulnerabilities (SCA)
+                
                 vulns = res.get("Vulnerabilities", [])
                 for v in vulns:
                     pkg_name = v.get("PkgName", "")
@@ -236,7 +332,7 @@ class ScannerService:
                         message=f"{v.get('Title', '')}: {pkg_name} {installed} (Fixed: {fixed})",
                         severity=v.get("Severity", "UNKNOWN"),
                         file_path=target_file,
-                        start_line=1, # SCA often doesn't give line numbers
+                        start_line=1, 
                         end_line=1,
                         code_snippet=f"Package: {pkg_name}\nInstalled: {installed}\nFixed: {fixed}",
                         surrounding_context=v.get("Description", ""),
@@ -250,15 +346,10 @@ class ScannerService:
                     )
                     vulnerabilities.append(vuln)
                 
-                # Handle Misconfigurations (IaC/Secrets) - optional if relying on Checkov/Semgrep, but Trivy does this too
-                # For now focusing on SCA (Vulnerabilities) as per user request
-                
         except json.JSONDecodeError:
             logger.error("Failed to parse Trivy JSON output")
-            logger.debug(f"Trivy stdout: {result.stdout}")
+            logger.debug(f"Trivy stdout: {stdout_text}")
             
         return vulnerabilities
-
-
 
 scanner_service = ScannerService()

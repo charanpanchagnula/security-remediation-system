@@ -45,6 +45,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+
+class LoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        is_health_check = request.url.path == "/health"
+        
+        # Log start only if not health check
+        if not is_health_check:
+            logger.info(f"REQUEST START: {request.method} {request.url.path} from {request.client.host if request.client else 'unknown'}")
+        
+        try:
+            response = await call_next(request)
+            
+            # Log end only if not health check OR if health check failed (non-2xx)
+            if not is_health_check or not (200 <= response.status_code < 300):
+                logger.info(f"REQUEST END: {request.method} {request.url.path} - Status: {response.status_code}")
+                
+            return response
+        except Exception as e:
+            logger.error(f"REQUEST FAILED: {request.method} {request.url.path} - Error: {e}", exc_info=True)
+            raise
+
+app.add_middleware(LoggingMiddleware)
+
 # Include Routers
 app.include_router(health.router, tags=["Health"])
 app.include_router(scan.router, prefix="/api/v1", tags=["Scan"])
