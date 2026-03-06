@@ -79,6 +79,72 @@ class Orchestrator:
             "status": "queued"
         }
 
+    async def ingest_upload(
+        self,
+        archive_path: str,
+        project_name: str,
+        author: str,
+        source: str,
+        scanner_types: List[str]
+    ) -> Dict[str, Any]:
+        """
+        Entry point for CLI/MCP uploads.
+        Accepts a pre-saved local tar.gz, stores it, and queues a scan job.
+        Bypasses github_service entirely.
+        """
+        import os
+        from ..services.storage import get_storage
+
+        scan_id = str(uuid.uuid4())
+        storage = get_storage()
+
+        # Store the uploaded archive under a consistent key
+        archive_key = f"archives/upload-{scan_id}.tar.gz"
+        storage.upload_file(archive_path, archive_key)
+
+        try:
+            os.remove(archive_path)
+        except Exception:
+            pass
+
+        scanner_jobs = [
+            {"scanner": s, "status": "queued", "internal_scan_id": None, "vuln_count": 0}
+            for s in scanner_types
+        ]
+
+        message = {
+            "scan_id": scan_id,
+            "repo_url": f"local://{project_name}",
+            "commit_sha": None,
+            "branch": "local",
+            "archive_key": archive_key,
+            "scanner_types": scanner_types,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+        msg_id = queue_service.send_message(message)
+
+        initial_result = {
+            "scan_id": scan_id,
+            "project_name": project_name,
+            "author": author,
+            "source": source,
+            "repo_url": f"local://{project_name}",
+            "branch": "local",
+            "commit_sha": None,
+            "archive_key": archive_key,
+            "timestamp": message["timestamp"],
+            "status": "queued",
+            "scanner_types": scanner_types,
+            "scanner_jobs": scanner_jobs,
+            "vulnerabilities": [],
+            "remediations": [],
+            "summary": {"total_vulnerabilities": 0, "remediations_generated": 0},
+        }
+        result_service.save_scan_result(scan_id, initial_result)
+
+        return {"scan_id": scan_id, "message_id": msg_id, "status": "queued"}
+
     async def process_scan_job(self, job: Dict[str, Any]):
         """
         Worker Entry Point: Processes a dequeued scan job.
