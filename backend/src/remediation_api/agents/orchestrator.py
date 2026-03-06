@@ -246,6 +246,14 @@ class Orchestrator:
         result_service.save_scan_result(scan_id, final_result)
         logger.info(f"Scan {scan_id} complete. Results saved (No auto-remediation).")
 
+        # Clean up the source archive now that scanning is done
+        try:
+            from ..services.storage import get_storage
+            get_storage().delete_file(archive_key)
+            logger.info(f"Deleted source archive after scan: {archive_key}")
+        except Exception as e:
+            logger.warning(f"Could not delete archive {archive_key}: {e}")
+
     async def remediate_vulnerability(self, scan_id: str, vuln_id: str) -> Optional[RemediationResponse]:
         """
         On-Demand Remediation: Triggers the Agentic Loop for a single finding.

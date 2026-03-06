@@ -233,5 +233,6 @@ class S3StorageService(StorageService):
 
 def get_storage() -> StorageService:
     if settings.APP_ENV in ["local", "local_mock"]:
-        return LocalStorageService()
+        import os
+        return LocalStorageService(base_dir=settings.WORK_DIR)
     return S3StorageService()

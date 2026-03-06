@@ -13,9 +13,5 @@ services:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
-      - secremediator_data:/data
+      - ./data:/data
     restart: unless-stopped
-
-volumes:
-  secremediator_data:
-    driver: local
