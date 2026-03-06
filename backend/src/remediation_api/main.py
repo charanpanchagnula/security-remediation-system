@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
 import os
-from .routers import scan, health
+from .routers import scan, health, upload
 from .config import settings
 from .logger import get_logger
 from .worker import run_worker
@@ -73,6 +73,7 @@ app.add_middleware(LoggingMiddleware)
 # Include Routers
 app.include_router(health.router, tags=["Health"])
 app.include_router(scan.router, prefix="/api/v1", tags=["Scan"])
+app.include_router(upload.router, prefix="/api/v1", tags=["Upload"])
 
 # --- Static Frontend Serving ---
 # Path to built frontend (next.js 'out' directory)
