@@ -61,7 +61,7 @@ COPY backend/rules ./rules
 COPY --from=frontend-builder /app/frontend/out ./src/remediation_api/static
 
 # Create necessary dirs
-RUN mkdir -p local_storage work_dir
+RUN mkdir -p local_storage work_dir /data
 
 # Expose port
 EXPOSE 8000
