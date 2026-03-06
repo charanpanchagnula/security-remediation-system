@@ -1,0 +1,43 @@
+# Backend-only Dockerfile for local development and testing.
+# Skips the frontend build stage (no Clerk keys required).
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    PATH="/root/.local/bin:$PATH" \
+    PORT=8000
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    openssh-client \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Go (needed for Trivy and some Semgrep extensions)
+COPY --from=golang:1.23-bookworm /usr/local/go /usr/local/go
+ENV PATH=$PATH:/usr/local/go/bin
+
+# Install Trivy
+RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+
+# Install Checkov
+RUN pip install --no-cache-dir checkov
+
+WORKDIR /app/backend
+
+COPY backend/pyproject.toml backend/uv.lock ./
+RUN uv sync --no-dev
+
+COPY backend/src ./src
+COPY backend/rules ./rules
+
+RUN mkdir -p local_storage work_dir /data
+
+EXPOSE 8000
+
+CMD ["sh", "-c", "uv run uvicorn src.remediation_api.main:app --host 0.0.0.0 --port 8000"]

@@ -165,18 +165,22 @@ class Orchestrator:
         scanner_types = job.get("scanner_types", ["semgrep"])
         
         logger.info(f"Processing Scan {scan_id} with {scanner_types}")
-        
+
+        # Load existing record to preserve audit fields (project_name, author, source, scanner_jobs)
+        existing = result_service.get_scan(scan_id) or {}
+
         # Update status to 'in_progress' and run scanners
         in_progress_result = {
+            **existing,
             "scan_id": scan_id,
             "repo_url": repo_url,
             "branch": branch,
             "commit_sha": commit_sha,
-            "archive_key": archive_key, # Persist
+            "archive_key": archive_key,
             "timestamp": datetime.utcnow().isoformat(),
             "status": "in_progress",
             "scanner_types": scanner_types,
-             "summary": {"total_vulnerabilities": 0, "remediations_generated": 0}
+            "summary": {"total_vulnerabilities": 0, "remediations_generated": 0},
         }
         result_service.save_scan_result(scan_id, in_progress_result)
 
@@ -222,20 +226,21 @@ class Orchestrator:
         
         # Save the final scan results (remediation is triggered on-demand later)
         final_result = {
+            **existing,
             "scan_id": scan_id,
             "repo_url": repo_url,
             "branch": branch,
             "commit_sha": commit_sha,
-            "archive_key": archive_key, # Persist
+            "archive_key": archive_key,
             "timestamp": datetime.utcnow().isoformat(),
             "status": "completed",
             "vulnerabilities": [v.model_dump() for v in all_vulnerabilities],
-            "remediations": [], # Intentionally empty
+            "remediations": [],
             "scanner_types": scanner_types,
             "summary": {
                 "total_vulnerabilities": len(all_vulnerabilities),
-                "remediations_generated": 0
-            }
+                "remediations_generated": 0,
+            },
         }
         
         result_service.save_scan_result(scan_id, final_result)

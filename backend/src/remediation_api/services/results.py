@@ -61,13 +61,18 @@ class ResultService:
                      # Minimal summary for list view
                     summary = {
                         "scan_id": scan_data.get("scan_id"),
+                        "project_name": scan_data.get("project_name"),
+                        "author": scan_data.get("author"),
+                        "source": scan_data.get("source"),
                         "repo_url": scan_data.get("repo_url"),
                         "branch": scan_data.get("branch", "main"),
                         "commit_sha": scan_data.get("commit_sha"),
                         "timestamp": scan_data.get("timestamp"),
                         "vuln_count": scan_data.get("summary", {}).get("total_vulnerabilities", 0),
                         "rem_count": scan_data.get("summary", {}).get("remediations_generated", 0),
-                        "status": scan_data.get("status", "unknown")
+                        "status": scan_data.get("status", "unknown"),
+                        "scanner_jobs": scan_data.get("scanner_jobs", []),
+                        "summary": scan_data.get("summary", {}),
                     }
                     scans.append(summary)
             except Exception as e:
