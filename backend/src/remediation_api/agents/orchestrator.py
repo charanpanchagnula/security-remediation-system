@@ -79,6 +79,72 @@ class Orchestrator:
             "status": "queued"
         }
 
+    async def ingest_upload(
+        self,
+        archive_path: str,
+        project_name: str,
+        author: str,
+        source: str,
+        scanner_types: List[str]
+    ) -> Dict[str, Any]:
+        """
+        Entry point for CLI/MCP uploads.
+        Accepts a pre-saved local tar.gz, stores it, and queues a scan job.
+        Bypasses github_service entirely.
+        """
+        import os
+        from ..services.storage import get_storage
+
+        scan_id = str(uuid.uuid4())
+        storage = get_storage()
+
+        # Store the uploaded archive under a consistent key
+        archive_key = f"archives/upload-{scan_id}.tar.gz"
+        storage.upload_file(archive_path, archive_key)
+
+        try:
+            os.remove(archive_path)
+        except Exception:
+            pass
+
+        scanner_jobs = [
+            {"scanner": s, "status": "queued", "internal_scan_id": None, "vuln_count": 0}
+            for s in scanner_types
+        ]
+
+        message = {
+            "scan_id": scan_id,
+            "repo_url": f"local://{project_name}",
+            "commit_sha": None,
+            "branch": "local",
+            "archive_key": archive_key,
+            "scanner_types": scanner_types,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+        msg_id = queue_service.send_message(message)
+
+        initial_result = {
+            "scan_id": scan_id,
+            "project_name": project_name,
+            "author": author,
+            "source": source,
+            "repo_url": f"local://{project_name}",
+            "branch": "local",
+            "commit_sha": None,
+            "archive_key": archive_key,
+            "timestamp": message["timestamp"],
+            "status": "queued",
+            "scanner_types": scanner_types,
+            "scanner_jobs": scanner_jobs,
+            "vulnerabilities": [],
+            "remediations": [],
+            "summary": {"total_vulnerabilities": 0, "remediations_generated": 0},
+        }
+        result_service.save_scan_result(scan_id, initial_result)
+
+        return {"scan_id": scan_id, "message_id": msg_id, "status": "queued"}
+
     async def process_scan_job(self, job: Dict[str, Any]):
         """
         Worker Entry Point: Processes a dequeued scan job.
@@ -99,18 +165,22 @@ class Orchestrator:
         scanner_types = job.get("scanner_types", ["semgrep"])
         
         logger.info(f"Processing Scan {scan_id} with {scanner_types}")
-        
+
+        # Load existing record to preserve audit fields (project_name, author, source, scanner_jobs)
+        existing = result_service.get_scan(scan_id) or {}
+
         # Update status to 'in_progress' and run scanners
         in_progress_result = {
+            **existing,
             "scan_id": scan_id,
             "repo_url": repo_url,
             "branch": branch,
             "commit_sha": commit_sha,
-            "archive_key": archive_key, # Persist
+            "archive_key": archive_key,
             "timestamp": datetime.utcnow().isoformat(),
             "status": "in_progress",
             "scanner_types": scanner_types,
-             "summary": {"total_vulnerabilities": 0, "remediations_generated": 0}
+            "summary": {"total_vulnerabilities": 0, "remediations_generated": 0},
         }
         result_service.save_scan_result(scan_id, in_progress_result)
 
@@ -156,24 +226,33 @@ class Orchestrator:
         
         # Save the final scan results (remediation is triggered on-demand later)
         final_result = {
+            **existing,
             "scan_id": scan_id,
             "repo_url": repo_url,
             "branch": branch,
             "commit_sha": commit_sha,
-            "archive_key": archive_key, # Persist
+            "archive_key": archive_key,
             "timestamp": datetime.utcnow().isoformat(),
             "status": "completed",
             "vulnerabilities": [v.model_dump() for v in all_vulnerabilities],
-            "remediations": [], # Intentionally empty
+            "remediations": [],
             "scanner_types": scanner_types,
             "summary": {
                 "total_vulnerabilities": len(all_vulnerabilities),
-                "remediations_generated": 0
-            }
+                "remediations_generated": 0,
+            },
         }
         
         result_service.save_scan_result(scan_id, final_result)
         logger.info(f"Scan {scan_id} complete. Results saved (No auto-remediation).")
+
+        # Clean up the source archive now that scanning is done
+        try:
+            from ..services.storage import get_storage
+            get_storage().delete_file(archive_key)
+            logger.info(f"Deleted source archive after scan: {archive_key}")
+        except Exception as e:
+            logger.warning(f"Could not delete archive {archive_key}: {e}")
 
     async def remediate_vulnerability(self, scan_id: str, vuln_id: str) -> Optional[RemediationResponse]:
         """
