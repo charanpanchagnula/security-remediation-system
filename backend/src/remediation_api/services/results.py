@@ -108,6 +108,25 @@ class ResultService:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
 
+    def set_vuln_remediation_pending(self, scan_id: str, vuln_id: str) -> None:
+        """Mark a vulnerability as having remediation in-flight."""
+        scan_data = self.get_scan(scan_id)
+        if not scan_data:
+            return
+        pending = scan_data.setdefault("pending_remediations", [])
+        if vuln_id not in pending:
+            pending.append(vuln_id)
+        self.save_scan_result(scan_id, scan_data)
+
+    def clear_vuln_remediation_pending(self, scan_id: str, vuln_id: str) -> None:
+        """Remove a vulnerability from the pending remediation list."""
+        scan_data = self.get_scan(scan_id)
+        if not scan_data:
+            return
+        pending = scan_data.get("pending_remediations", [])
+        scan_data["pending_remediations"] = [v for v in pending if v != vuln_id]
+        self.save_scan_result(scan_id, scan_data)
+
     def delete_scan(self, scan_id: str):
         """
         Hard deletes a scan and its associated resources (artifacts, vector entries, result JSON).
