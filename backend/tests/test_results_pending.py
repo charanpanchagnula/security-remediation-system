@@ -65,3 +65,6 @@ def test_clear_pending_safe_when_not_present(tmp_path):
     _save(svc, SCAN)
     # Should not raise
     svc.clear_vuln_remediation_pending("scan-1", "vuln-99")
+    result = svc.get_scan("scan-1")
+    assert result is not None
+    assert result.get("pending_remediations", []) == []

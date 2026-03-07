@@ -112,6 +112,7 @@ class ResultService:
         """Mark a vulnerability as having remediation in-flight."""
         scan_data = self.get_scan(scan_id)
         if not scan_data:
+            logger.warning(f"set_vuln_remediation_pending: scan {scan_id} not found, skipping")
             return
         pending = scan_data.setdefault("pending_remediations", [])
         if vuln_id not in pending:
@@ -122,6 +123,7 @@ class ResultService:
         """Remove a vulnerability from the pending remediation list."""
         scan_data = self.get_scan(scan_id)
         if not scan_data:
+            logger.warning(f"clear_vuln_remediation_pending: scan {scan_id} not found, skipping")
             return
         pending = scan_data.get("pending_remediations", [])
         scan_data["pending_remediations"] = [v for v in pending if v != vuln_id]
