@@ -64,8 +64,29 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="get_vulnerability_detail",
+            description=(
+                "Get full details for a specific vulnerability: complete message, vulnerable code snippet, "
+                "surrounding context, taint trace, and metadata. Use this after get_scan_results to "
+                "deeply inspect a finding before requesting remediation."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "scan_id": {"type": "string"},
+                    "vuln_id": {"type": "string"},
+                },
+                "required": ["scan_id", "vuln_id"],
+            },
+        ),
+        Tool(
             name="request_remediation",
-            description="Get AI-generated remediation for a specific vulnerability by its vuln id.",
+            description=(
+                    "Trigger AI-generated remediation for a specific vulnerability. "
+                    "Returns immediately with status 'pending' or 'completed'. "
+                    "If pending, call get_scan_results to check when the remediation appears "
+                    "in the scan's remediations list."
+                ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -117,6 +138,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     elif name == "get_scan_results":
         data = await asyncio.to_thread(client.get_scan, arguments["scan_id"])
         return [TextContent(type="text", text=json.dumps(data, indent=2))]
+
+    elif name == "get_vulnerability_detail":
+        result = await asyncio.to_thread(
+            client.get_vulnerability, arguments["scan_id"], arguments["vuln_id"]
+        )
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
     elif name == "request_remediation":
         result = await asyncio.to_thread(
