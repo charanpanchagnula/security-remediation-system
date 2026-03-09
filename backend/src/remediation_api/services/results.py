@@ -61,13 +61,18 @@ class ResultService:
                      # Minimal summary for list view
                     summary = {
                         "scan_id": scan_data.get("scan_id"),
+                        "project_name": scan_data.get("project_name"),
+                        "author": scan_data.get("author"),
+                        "source": scan_data.get("source"),
                         "repo_url": scan_data.get("repo_url"),
                         "branch": scan_data.get("branch", "main"),
                         "commit_sha": scan_data.get("commit_sha"),
                         "timestamp": scan_data.get("timestamp"),
                         "vuln_count": scan_data.get("summary", {}).get("total_vulnerabilities", 0),
                         "rem_count": scan_data.get("summary", {}).get("remediations_generated", 0),
-                        "status": scan_data.get("status", "unknown")
+                        "status": scan_data.get("status", "unknown"),
+                        "scanner_jobs": scan_data.get("scanner_jobs", []),
+                        "summary": scan_data.get("summary", {}),
                     }
                     scans.append(summary)
             except Exception as e:
@@ -102,6 +107,27 @@ class ResultService:
         finally:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
+
+    def set_vuln_remediation_pending(self, scan_id: str, vuln_id: str) -> None:
+        """Mark a vulnerability as having remediation in-flight."""
+        scan_data = self.get_scan(scan_id)
+        if not scan_data:
+            logger.warning(f"set_vuln_remediation_pending: scan {scan_id} not found, skipping")
+            return
+        pending = scan_data.setdefault("pending_remediations", [])
+        if vuln_id not in pending:
+            pending.append(vuln_id)
+        self.save_scan_result(scan_id, scan_data)
+
+    def clear_vuln_remediation_pending(self, scan_id: str, vuln_id: str) -> None:
+        """Remove a vulnerability from the pending remediation list."""
+        scan_data = self.get_scan(scan_id)
+        if not scan_data:
+            logger.warning(f"clear_vuln_remediation_pending: scan {scan_id} not found, skipping")
+            return
+        pending = scan_data.get("pending_remediations", [])
+        scan_data["pending_remediations"] = [v for v in pending if v != vuln_id]
+        self.save_scan_result(scan_id, scan_data)
 
     def delete_scan(self, scan_id: str):
         """
