@@ -33,20 +33,34 @@ async def trigger_scan(request: ScanRequest):
 
 @router.post("/scan/{scan_id}/remediate/{vuln_id}")
 async def remediate_vuln_endpoint(scan_id: str, vuln_id: str, background_tasks: BackgroundTasks):
-    """Triggers remediation for a single vulnerability."""
-    try:
-        # We run this in background so UI returns immediately? 
-        # User wants "progress bar". If I return immediately, they need to poll.
-        # If I await it, they wait but see loading. 
-        # DeepSeek takes 10-20s. Awaiting is probably okay for single item.
-        logger.info(f"Remediating vuln {vuln_id} for scan {scan_id}")
-        result = await orchestrator.remediate_vulnerability(scan_id, vuln_id)
-        if not result:
-            raise HTTPException(status_code=404, detail="Remediation could not be generated")
-        return result.model_dump()
-    except Exception as e:
-        logger.error(f"Remediation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """Triggers remediation for a single vulnerability. Returns immediately."""
+    scan_data = result_service.get_scan(scan_id)
+    if not scan_data:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    # Idempotent: already completed
+    existing = next(
+        (r for r in scan_data.get("remediations", []) if r.get("vulnerability_id") == vuln_id),
+        None,
+    )
+    if existing:
+        return {"status": "completed", "vuln_id": vuln_id}
+
+    # Idempotent: already queued
+    if vuln_id in scan_data.get("pending_remediations", []):
+        return {"status": "pending", "vuln_id": vuln_id}
+
+    result_service.set_vuln_remediation_pending(scan_id, vuln_id)
+    logger.info(f"Queued remediation for vuln {vuln_id} in scan {scan_id}")
+
+    async def _run():
+        try:
+            await orchestrator.remediate_vulnerability(scan_id, vuln_id)
+        finally:
+            result_service.clear_vuln_remediation_pending(scan_id, vuln_id)
+
+    background_tasks.add_task(_run)
+    return {"status": "pending", "vuln_id": vuln_id}
 
 @router.post("/scan/{scan_id}/remediate-all")
 async def batch_remediate_endpoint(scan_id: str, background_tasks: BackgroundTasks):
@@ -74,6 +88,18 @@ async def get_scan(scan_id: str):
     if not result:
         raise HTTPException(status_code=404, detail="Scan not found")
     return result
+
+@router.get("/scans/{scan_id}/vulnerabilities/{vuln_id}", response_model=Dict[str, Any])
+async def get_vulnerability(scan_id: str, vuln_id: str):
+    """Get full details for a specific vulnerability."""
+    result = result_service.get_scan(scan_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    vuln = next((v for v in result.get("vulnerabilities", []) if v.get("id") == vuln_id), None)
+    if not vuln:
+        raise HTTPException(status_code=404, detail="Vulnerability not found")
+    return vuln
+
 
 @router.delete("/scans/{scan_id}")
 async def delete_scan(scan_id: str):
