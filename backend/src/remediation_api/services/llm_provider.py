@@ -8,7 +8,6 @@ class LLMProvider(ABC):
     """Abstract base class for LLM providers to ensure extensibility."""
     
     @abstractmethod
-    @abstractmethod
     def get_model(self, model_id: Optional[str] = None) -> Model:
         """
         Returns a configured Agno Model instance.
