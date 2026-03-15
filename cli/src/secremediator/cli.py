@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import subprocess
@@ -11,10 +12,36 @@ from datetime import datetime
 
 from .archiver import create_archive
 from .client import SecRemediatorClient
-from .config import save_to_history, load_history, get_api_url
+from .config import save_to_history, load_history, get_api_url, save_archive, get_archive_path
 
 app = typer.Typer(help="secremediator — local security scanning CLI")
 console = Console()
+
+
+def _security_scan_dir(target: Path) -> Path:
+    return target / ".security-scan"
+
+
+def _ensure_security_scan_dir(target: Path) -> Path:
+    d = _security_scan_dir(target)
+    (d / "sessions").mkdir(parents=True, exist_ok=True)
+    (d / "patches").mkdir(parents=True, exist_ok=True)
+    gitignore = d / ".gitignore"
+    if not gitignore.exists():
+        gitignore.write_text("*\n")
+    return d
+
+
+def _save_session(scan_dir: Path, data: dict):
+    path = scan_dir / "sessions" / f"{data['scan_id']}.json"
+    path.write_text(json.dumps(data, indent=2))
+
+
+def _load_session(scan_dir: Path, scan_id: str) -> Optional[dict]:
+    path = scan_dir / "sessions" / f"{scan_id}.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())
 
 
 def _find_local_file(container_path: str) -> list:
@@ -110,14 +137,22 @@ def scan(
             )
         except Exception as e:
             rprint(f"[red]Upload failed:[/red] {e}")
-            raise typer.Exit(1)
-        finally:
             try:
                 Path(archive_path).unlink(missing_ok=True)
             except Exception:
                 pass
+            raise typer.Exit(1)
 
     scan_id = result["scan_id"]
+    try:
+        if Path(archive_path).exists():
+            save_archive(scan_id, archive_path)
+            Path(archive_path).unlink()
+    except Exception:
+        try:
+            Path(archive_path).unlink(missing_ok=True)
+        except Exception:
+            pass
     save_to_history({
         "scan_id": scan_id,
         "project_name": project_name,
@@ -126,6 +161,22 @@ def scan(
         "path": str(target),
         "submitted_at": datetime.utcnow().isoformat(),
         "api_url": api_url or get_api_url(),
+    })
+
+    scan_dir = _ensure_security_scan_dir(target)
+    _save_session(scan_dir, {
+        "scan_id": scan_id,
+        "project_name": project_name,
+        "author": author_name,
+        "scanners": scanner_list,
+        "path": str(target),
+        "submitted_at": datetime.utcnow().isoformat(),
+        "api_url": api_url or get_api_url(),
+        "status": "queued",
+        "summary": {},
+        "vulnerability_ids": [],
+        "remediation_status": {},
+        "last_synced_at": None,
     })
 
     console.print(f"\n[green]✓[/green] Scan queued.")
@@ -335,3 +386,37 @@ def remediate(
     else:
         console.print(f"\n[green]✓[/green] Remediation queued for [dim]{vuln_id}[/dim]")
         console.print(f"\n  Check back with: [cyan]secremediator results {scan_id}[/cyan]\n")
+
+
+@app.command()
+def sync(
+    path: str = typer.Argument(".", help="Repo directory containing .security-scan/"),
+    api_url: Optional[str] = typer.Option(None, "--api-url"),
+):
+    """Refresh scan status for all sessions in .security-scan/."""
+    target = Path(path).resolve()
+    scan_dir = _security_scan_dir(target)
+    sessions_dir = scan_dir / "sessions"
+    if not sessions_dir.exists():
+        rprint("[yellow]No .security-scan/ found.[/yellow]")
+        return
+
+    sessions = list(sessions_dir.glob("*.json"))
+    if not sessions:
+        rprint("[yellow]No sessions found.[/yellow]")
+        return
+
+    for session_file in sessions:
+        session = json.loads(session_file.read_text())
+        scan_id = session["scan_id"]
+        client = SecRemediatorClient(api_url=api_url or session.get("api_url"))
+        try:
+            data = client.get_scan(scan_id)
+            session["status"] = data.get("status", "unknown")
+            session["summary"] = data.get("summary", {})
+            session["vulnerability_ids"] = [v["id"] for v in data.get("vulnerabilities", [])]
+            session["last_synced_at"] = datetime.utcnow().isoformat()
+            session_file.write_text(json.dumps(session, indent=2))
+            console.print(f"[green]✓[/green] {scan_id[:8]}...  {session['status']}")
+        except Exception as e:
+            rprint(f"[red]✗[/red] {scan_id[:8]}...  {e}")
