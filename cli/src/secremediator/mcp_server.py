@@ -264,6 +264,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             file_path.write_text("".join(lines))
             applied_files.append(change["file_path"])
 
+        if applied_files:
+            session_file = repo_path / ".security-scan" / "sessions" / f"{scan_id}.json"
+            if session_file.exists():
+                session = json.loads(session_file.read_text())
+                session.setdefault("remediation_status", {})[vuln_id] = "applied"
+                session_file.write_text(json.dumps(session, indent=2))
+
         return [TextContent(type="text", text=json.dumps({
             "status": "applied",
             "vuln_id": vuln_id,

@@ -475,7 +475,7 @@ def _run_revalidation(
         extract_dir.mkdir()
 
         with tarfile.open(archive_path, "r:gz") as tar:
-            tar.extractall(extract_dir)
+            tar.extractall(extract_dir, filter="data")
 
         for change in patch.get("code_changes", []):
             target_file = extract_dir / change["file_path"].lstrip("/")
@@ -580,7 +580,7 @@ def remediate_all(
 
     console.print(f"\n[bold]{len(vulns)} findings to remediate[/bold]")
     if use_local_claude:
-        console.print("[dim]Using local Claude (Anthropic SDK)[/dim]")
+        console.print("[dim]Using local Claude (Agent SDK)[/dim]")
         from .agent import LocalClaudeRemediator
         remediator = LocalClaudeRemediator()
     else:
@@ -724,10 +724,12 @@ def apply(
 
         console.print(f"\n[cyan]{vid[:8]}[/cyan]  revalidation={reval_status}  confidence={patch.get('confidence_score', 0):.2f}")
 
+        files_written = 0
         for change in changes:
             file_path = target / change["file_path"].lstrip("/")
             if not file_path.exists():
                 rprint(f"  [red]File not found: {file_path}[/red]")
+                skipped += 1
                 continue
 
             lines = file_path.read_text().splitlines(keepends=True)
@@ -744,14 +746,16 @@ def apply(
             if not dry_run:
                 lines[s:e] = new_lines
                 file_path.write_text("".join(lines))
+                files_written += 1
 
         if not dry_run:
-            session_file = _security_scan_dir(target) / "sessions" / f"{scan_id}.json"
-            if session_file.exists():
-                session = json.loads(session_file.read_text())
-                session.setdefault("remediation_status", {})[vid] = "applied"
-                session_file.write_text(json.dumps(session, indent=2))
-            applied += 1
+            if files_written > 0:
+                session_file = _security_scan_dir(target) / "sessions" / f"{scan_id}.json"
+                if session_file.exists():
+                    session = json.loads(session_file.read_text())
+                    session.setdefault("remediation_status", {})[vid] = "applied"
+                    session_file.write_text(json.dumps(session, indent=2))
+                applied += 1
         else:
             console.print(f"  [dim](dry-run — not written)[/dim]")
 

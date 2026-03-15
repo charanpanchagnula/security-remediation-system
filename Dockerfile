@@ -43,7 +43,7 @@ RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
 # Install Checkov independently
-RUN pip install --no-cache-dir checkov
+RUN pip install --no-cache-dir checkov semgrep
 
 # Setup Work Directory
 WORKDIR /app/backend
