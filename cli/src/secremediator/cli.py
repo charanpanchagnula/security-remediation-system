@@ -420,3 +420,342 @@ def sync(
             console.print(f"[green]✓[/green] {scan_id[:8]}...  {session['status']}")
         except Exception as e:
             rprint(f"[red]✗[/red] {scan_id[:8]}...  {e}")
+
+
+def _poll_until_complete(client: SecRemediatorClient, scan_id: str, label: str = "") -> dict:
+    """Poll a scan every 10s, printing a dot per poll, until status is terminal."""
+    import time
+    terminal = {"completed", "failed"}
+    console.print(f"[dim]Polling {label or scan_id[:8]}...[/dim] ", end="")
+    while True:
+        data = client.get_scan(scan_id)
+        status = data.get("status", "unknown")
+        if status in terminal:
+            console.print(f" {status}")
+            return data
+        console.print(".", end="", highlight=False)
+        time.sleep(10)
+
+
+def _run_revalidation(
+    client: SecRemediatorClient,
+    original_scan_id: str,
+    vuln: dict,
+    patch: dict,
+    api_url: str,
+) -> dict:
+    """
+    Revalidate a patch by:
+    1. Extracting original archive to temp dir
+    2. Overwriting patched files with new_code
+    3. Re-archiving and submitting a new scan
+    4. Checking: original vuln gone AND no new issues in patched files
+    """
+    import tarfile, tempfile
+    from .archiver import create_archive
+
+    archive_path = get_archive_path(original_scan_id)
+    if not archive_path:
+        return {
+            "vuln_id": vuln["id"],
+            "original_scan_id": original_scan_id,
+            "revalidation_scan_id": None,
+            "patched_files": [],
+            "status": "SKIPPED_NO_ARCHIVE",
+            "original_vuln_still_present": None,
+            "new_findings_in_patched_files": [],
+            "validated_at": datetime.utcnow().isoformat(),
+            "note": "Original archive not found; cannot revalidate",
+        }
+
+    patched_files = [c["file_path"] for c in patch.get("code_changes", [])]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        extract_dir = Path(tmp) / "source"
+        extract_dir.mkdir()
+
+        with tarfile.open(archive_path, "r:gz") as tar:
+            tar.extractall(extract_dir)
+
+        for change in patch.get("code_changes", []):
+            target_file = extract_dir / change["file_path"].lstrip("/")
+            if not target_file.exists():
+                continue
+            lines = target_file.read_text().splitlines(keepends=True)
+            s = change["start_line"] - 1
+            e = change["end_line"]
+            new_lines = [change["new_code"] + "\n"] if change["new_code"] else []
+            lines[s:e] = new_lines
+            target_file.write_text("".join(lines))
+
+        reval_archive = create_archive(str(extract_dir))
+        try:
+            result = client.upload_scan(
+                archive_path=reval_archive,
+                project_name=f"revalidation_{vuln['id'][:8]}",
+                author="secremediator-revalidation",
+                scanners=["semgrep", "checkov", "trivy"],
+            )
+        finally:
+            Path(reval_archive).unlink(missing_ok=True)
+
+    reval_scan_id = result["scan_id"]
+    reval_data = _poll_until_complete(client, reval_scan_id, f"revalidation {vuln['id'][:8]}")
+    reval_vulns = reval_data.get("vulnerabilities", [])
+
+    original_still_present = any(
+        v.get("rule_id") == vuln.get("rule_id")
+        and v.get("file_path") == vuln.get("file_path")
+        and v.get("start_line") == vuln.get("start_line")
+        for v in reval_vulns
+    )
+
+    new_issues = [
+        v for v in reval_vulns
+        if v.get("file_path") in patched_files
+        and not (
+            v.get("rule_id") == vuln.get("rule_id")
+            and v.get("file_path") == vuln.get("file_path")
+            and v.get("start_line") == vuln.get("start_line")
+        )
+    ]
+
+    if not original_still_present and not new_issues:
+        status = "PASS"
+    elif original_still_present and new_issues:
+        status = "FAIL_BOTH"
+    elif original_still_present:
+        status = "FAIL_STILL_VULNERABLE"
+    else:
+        status = "FAIL_NEW_ISSUES"
+
+    return {
+        "vuln_id": vuln["id"],
+        "original_scan_id": original_scan_id,
+        "revalidation_scan_id": reval_scan_id,
+        "patched_files": patched_files,
+        "status": status,
+        "original_vuln_still_present": original_still_present,
+        "new_findings_in_patched_files": new_issues,
+        "validated_at": datetime.utcnow().isoformat(),
+        "note": "Only files touched by the patch are checked for new issues",
+    }
+
+
+@app.command("remediate-all")
+def remediate_all(
+    scan_id: str = typer.Argument(..., help="Scan ID to remediate"),
+    use_local_claude: bool = typer.Option(False, "--use-local-claude", help="Use local Claude via Anthropic SDK instead of backend engine"),
+    severity: Optional[str] = typer.Option(None, "--severity", help="Comma-separated severities to include, e.g. CRITICAL,HIGH"),
+    api_url: Optional[str] = typer.Option(None, "--api-url"),
+):
+    """Run full remediation loop: poll -> patch -> revalidate. Patches land in .security-scan/."""
+    import time
+    client = SecRemediatorClient(api_url=api_url)
+
+    history = load_history()
+    entry = next((e for e in history if e["scan_id"] == scan_id), None)
+    if not entry:
+        rprint(f"[red]Scan {scan_id} not found in history.[/red]")
+        raise typer.Exit(1)
+
+    target = Path(entry["path"])
+    scan_dir = _ensure_security_scan_dir(target)
+    patches_base = scan_dir / "patches" / scan_id
+
+    console.print(f"\n[bold]Waiting for scan to complete...[/bold]")
+    data = _poll_until_complete(client, scan_id)
+    if data.get("status") == "failed":
+        rprint("[red]Scan failed.[/red]")
+        raise typer.Exit(1)
+
+    vulns = data.get("vulnerabilities", [])
+    if severity:
+        allowed = {s.strip().upper() for s in severity.split(",")}
+        vulns = [v for v in vulns if v.get("severity", "").upper() in allowed]
+
+    if not vulns:
+        rprint("[green]No findings to remediate.[/green]")
+        return
+
+    console.print(f"\n[bold]{len(vulns)} findings to remediate[/bold]")
+    if use_local_claude:
+        console.print("[dim]Using local Claude (Anthropic SDK)[/dim]")
+        from .agent import LocalClaudeRemediator
+        remediator = LocalClaudeRemediator()
+    else:
+        console.print("[dim]Using backend remediation engine[/dim]")
+
+    passed = failed = skipped = 0
+
+    for vuln in vulns:
+        vuln_id = vuln["id"]
+        patch_dir = patches_base / vuln_id
+        patch_dir.mkdir(parents=True, exist_ok=True)
+        patch_file = patch_dir / "patch.json"
+        reval_file = patch_dir / "revalidation.json"
+
+        console.print(f"\n[cyan]▸[/cyan] {vuln.get('severity')} {vuln.get('rule_id')}  {vuln.get('file_path')}:{vuln.get('start_line')}")
+
+        try:
+            if use_local_claude:
+                vuln_detail = client.get_vulnerability(scan_id, vuln_id)
+                source = vuln_detail.get("code_snippet", "") or vuln_detail.get("surrounding_context", "")
+                patch = remediator.generate_patch(vuln_detail, source)
+            else:
+                client.request_remediation(scan_id, vuln_id)
+                for _ in range(60):
+                    scan_data = client.get_scan(scan_id)
+                    rems = {r["vulnerability_id"]: r for r in scan_data.get("remediations", [])}
+                    if vuln_id in rems:
+                        rem = rems[vuln_id]
+                        patch = {
+                            "summary": rem.get("summary", ""),
+                            "confidence_score": rem.get("confidence_score", 0),
+                            "is_false_positive": rem.get("is_false_positive", False),
+                            "code_changes": rem.get("code_changes", []),
+                            "security_implications": rem.get("security_implications", []),
+                        }
+                        break
+                    time.sleep(10)
+                else:
+                    rprint(f"  [yellow]Timed out waiting for remediation.[/yellow]")
+                    skipped += 1
+                    continue
+
+            patch["vuln_id"] = vuln_id
+            patch["scan_id"] = scan_id
+            patch["generated_by"] = "local_claude" if use_local_claude else "backend_engine"
+            patch["created_at"] = datetime.utcnow().isoformat()
+            patch_file.write_text(json.dumps(patch, indent=2))
+            console.print(f"  [green]✓[/green] Patch generated  confidence: {patch.get('confidence_score', 0):.2f}")
+
+        except Exception as e:
+            rprint(f"  [red]✗[/red] Patch generation failed: {e}")
+            skipped += 1
+            continue
+
+        console.print(f"  [dim]Revalidating...[/dim]")
+        try:
+            reval = _run_revalidation(client, scan_id, vuln, patch, api_url or get_api_url())
+            reval_file.write_text(json.dumps(reval, indent=2))
+            if reval["status"] == "PASS":
+                console.print(f"  [green]✓[/green] Revalidation PASS")
+                passed += 1
+            else:
+                console.print(f"  [yellow]⚠[/yellow] Revalidation {reval['status']}")
+                failed += 1
+        except Exception as e:
+            rprint(f"  [red]✗[/red] Revalidation error: {e}")
+            skipped += 1
+
+    console.print(f"\n[bold]Done.[/bold]  ✓ {passed} PASS  ⚠ {failed} FAIL  — {skipped} skipped")
+    console.print(f"Patches in: [cyan]{scan_dir / 'patches' / scan_id}[/cyan]")
+    console.print(f"Apply with: [cyan]secremediator apply {scan_id} --all[/cyan]\n")
+
+
+@app.command()
+def apply(
+    scan_id: str = typer.Argument(..., help="Scan ID whose patches to apply"),
+    vuln_id: Optional[str] = typer.Option(None, "--vuln", help="Apply a single vulnerability's patch"),
+    all_patches: bool = typer.Option(False, "--all", help="Apply all patches that passed revalidation"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would change without modifying files"),
+    force: bool = typer.Option(False, "--force", help="Apply even patches that failed revalidation"),
+    api_url: Optional[str] = typer.Option(None, "--api-url"),
+):
+    """Apply generated patches to files on disk."""
+    if not vuln_id and not all_patches:
+        rprint("[red]Specify --vuln <id> or --all.[/red]")
+        raise typer.Exit(1)
+
+    history = load_history()
+    entry = next((e for e in history if e["scan_id"] == scan_id), None)
+    if not entry:
+        rprint(f"[red]Scan {scan_id} not in history.[/red]")
+        raise typer.Exit(1)
+
+    target = Path(entry["path"])
+    patches_base = _security_scan_dir(target) / "patches" / scan_id
+
+    if not patches_base.exists():
+        rprint(f"[red]No patches found at {patches_base}[/red]")
+        raise typer.Exit(1)
+
+    if vuln_id:
+        patch_dirs = [patches_base / vuln_id]
+    else:
+        patch_dirs = [d for d in patches_base.iterdir() if d.is_dir()]
+
+    applied = skipped = 0
+
+    for patch_dir in patch_dirs:
+        patch_file = patch_dir / "patch.json"
+        reval_file = patch_dir / "revalidation.json"
+
+        if not patch_file.exists():
+            rprint(f"[yellow]No patch.json in {patch_dir.name}[/yellow]")
+            skipped += 1
+            continue
+
+        patch = json.loads(patch_file.read_text())
+        vid = patch.get("vuln_id", patch_dir.name)
+
+        if reval_file.exists():
+            reval = json.loads(reval_file.read_text())
+            reval_status = reval.get("status", "UNKNOWN")
+        else:
+            reval_status = "NOT_RUN"
+
+        if reval_status != "PASS" and not force:
+            if reval_status == "NOT_RUN":
+                if not typer.confirm(f"  {vid[:8]}: revalidation not run — apply anyway?", default=False):
+                    skipped += 1
+                    continue
+            else:
+                rprint(f"  [yellow]Skipping {vid[:8]}: revalidation {reval_status}. Use --force to override.[/yellow]")
+                skipped += 1
+                continue
+
+        changes = patch.get("code_changes", [])
+        if not changes:
+            rprint(f"  [yellow]{vid[:8]}: no code_changes in patch.[/yellow]")
+            skipped += 1
+            continue
+
+        console.print(f"\n[cyan]{vid[:8]}[/cyan]  revalidation={reval_status}  confidence={patch.get('confidence_score', 0):.2f}")
+
+        for change in changes:
+            file_path = target / change["file_path"].lstrip("/")
+            if not file_path.exists():
+                rprint(f"  [red]File not found: {file_path}[/red]")
+                continue
+
+            lines = file_path.read_text().splitlines(keepends=True)
+            s = change["start_line"] - 1
+            e = change["end_line"]
+            new_lines = [change["new_code"] + "\n"] if change["new_code"] else []
+
+            console.print(f"  [dim]{change['file_path']}  lines {change['start_line']}–{change['end_line']}[/dim]")
+            for l in change.get("original_code", "").splitlines():
+                console.print(f"  [red]- {l}[/red]")
+            for l in change.get("new_code", "").splitlines():
+                console.print(f"  [green]+ {l}[/green]")
+
+            if not dry_run:
+                lines[s:e] = new_lines
+                file_path.write_text("".join(lines))
+
+        if not dry_run:
+            session_file = _security_scan_dir(target) / "sessions" / f"{scan_id}.json"
+            if session_file.exists():
+                session = json.loads(session_file.read_text())
+                session.setdefault("remediation_status", {})[vid] = "applied"
+                session_file.write_text(json.dumps(session, indent=2))
+            applied += 1
+        else:
+            console.print(f"  [dim](dry-run — not written)[/dim]")
+
+    if dry_run:
+        console.print(f"\n[dim]Dry run complete. {len(patch_dirs)} patches previewed.[/dim]")
+    else:
+        console.print(f"\n[bold]Done.[/bold]  {applied} applied  {skipped} skipped\n")
