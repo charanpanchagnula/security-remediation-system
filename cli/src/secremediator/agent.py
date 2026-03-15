@@ -1,17 +1,18 @@
 """
-LocalClaudeRemediator: generates security patches via a 4-turn conversation loop.
+LocalClaudeRemediator: generates security patches via the Claude Agent SDK.
 
-Turn 1 — Analyze:    Is this a real vulnerability? What is the root cause?
-Turn 2 — Strategize: What fix approach? Any tradeoffs?
-Turn 3 — Generate:   Produce the patch JSON.
-Turn 4 — Evaluate:   Does the patch look correct? Any regressions?
+The agent follows a 4-step reasoning process internally:
+  1. Analyze:    Is this a real vulnerability? What is the root cause?
+  2. Strategize: What fix approach? Any tradeoffs?
+  3. Generate:   Produce the patch JSON.
+  4. Evaluate:   Does the patch look correct? Any regressions?
 
 This mirrors the backend orchestrator/generator/evaluator agent pattern.
 Activated via --use-local-claude flag on the remediate-all command.
 """
 import json
-import anthropic
-from typing import Optional
+import asyncio
+from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage
 
 
 PATCH_SCHEMA = """{
@@ -28,90 +29,81 @@ PATCH_SCHEMA = """{
       "description": "why this change fixes the issue"
     }
   ],
-  "security_implications": ["list of security notes"]
+  "security_implications": ["list of security notes"],
+  "evaluation_concerns": ["empty if approved; list concerns if self-evaluation found issues"]
 }"""
 
-EVALUATE_SCHEMA = """{
-  "approved": true or false,
-  "concerns": ["list of concerns, empty if approved"]
-}"""
+
+SYSTEM_PROMPT = """You are a security engineer performing code remediation.
+
+Follow this 4-step process before producing output:
+
+Step 1 — ANALYZE: Examine the vulnerability report and source code.
+  - Is this a real vulnerability or a false positive?
+  - What is the root cause?
+  - What is the potential impact?
+
+Step 2 — STRATEGIZE: Determine the fix approach.
+  - What is the safest, most minimal fix?
+  - Are there any tradeoffs or risks?
+
+Step 3 — GENERATE: Produce the patch.
+
+Step 4 — EVALUATE: Review your own patch.
+  - Does it correctly fix the vulnerability?
+  - Could it introduce regressions?
+  - If you find concerns you cannot resolve, list them in evaluation_concerns.
+
+Respond with ONLY a JSON object matching the schema provided — no markdown fences, no explanation.
+If the finding is a false positive, set is_false_positive to true and code_changes to [].
+"""
 
 
 class LocalClaudeRemediator:
     """
-    Uses the Anthropic Python SDK with a 4-turn conversation to generate a
-    remediation patch for a single vulnerability.
+    Uses the Claude Agent SDK to generate a remediation patch for a single
+    vulnerability via a 4-step internal reasoning process.
     Returns a dict matching the patch.json schema.
+    Raises ValueError if the agent returns non-JSON or self-evaluation has concerns.
     """
 
-    def __init__(self, model: str = "claude-sonnet-4-5"):
-        self.client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
+    def __init__(self, model: str = "claude-opus-4-6"):
         self.model = model
 
     def generate_patch(self, vulnerability: dict, source_code: str) -> dict:
         """
-        4-turn loop: Analyze → Strategize → Generate → Evaluate.
-        Short-circuits to false-positive result if Turn 1 determines FP.
-        Raises ValueError if Turn 4 rejects the patch or JSON is unparseable.
+        Synchronous entry point. Bridges to async Agent SDK via asyncio.run().
+        Public signature unchanged: generate_patch(vulnerability, source_code) -> dict.
         """
-        messages = []
+        return asyncio.run(self._generate(vulnerability, source_code))
 
-        # Turn 1 — Analyze
-        messages.append({"role": "user", "content": self._analyze_prompt(vulnerability, source_code)})
-        analysis = self._call(messages, max_tokens=1024)
-        messages.append({"role": "assistant", "content": analysis})
+    async def _generate(self, vulnerability: dict, source_code: str) -> dict:
+        result_text = None
 
-        # Short-circuit: false positive detected in analysis
-        if any(phrase in analysis.lower() for phrase in ["false positive", "not a vulnerability", "not exploitable"]):
-            return {
-                "summary": f"False positive: {analysis[:200]}",
-                "confidence_score": 1.0,
-                "is_false_positive": True,
-                "code_changes": [],
-                "security_implications": [],
-            }
+        async for message in query(
+            prompt=self._build_prompt(vulnerability, source_code),
+            options=ClaudeAgentOptions(
+                model=self.model,
+                allowed_tools=[],
+                system_prompt=SYSTEM_PROMPT,
+            ),
+        ):
+            if isinstance(message, ResultMessage):
+                result_text = message.result
 
-        # Turn 2 — Strategize
-        messages.append({"role": "user", "content": (
-            "Good analysis. Now describe your fix strategy. "
-            "What approach will you use? What are the tradeoffs? "
-            "Respond in plain text — no JSON yet."
-        )})
-        strategy = self._call(messages, max_tokens=1024)
-        messages.append({"role": "assistant", "content": strategy})
+        if not result_text:
+            raise ValueError("Agent returned no result")
 
-        # Turn 3 — Generate
-        messages.append({"role": "user", "content": (
-            f"Now produce the patch. Respond with ONLY a JSON object matching this schema "
-            f"(no markdown, no explanation):\n{PATCH_SCHEMA}"
-        )})
-        raw_patch = self._call(messages, max_tokens=2048)
-        messages.append({"role": "assistant", "content": raw_patch})
-        patch = self._parse_json(raw_patch)
+        patch = self._parse_json(result_text)
 
-        # Turn 4 — Evaluate
-        messages.append({"role": "user", "content": (
-            f"Review the patch you just produced. Does it correctly fix the vulnerability "
-            f"without introducing regressions? Respond with ONLY a JSON object:\n{EVALUATE_SCHEMA}"
-        )})
-        raw_eval = self._call(messages, max_tokens=1024)
-        evaluation = self._parse_json(raw_eval)
-
-        if not evaluation.get("approved", False):
-            concerns = evaluation.get("concerns", [])
-            raise ValueError(f"Patch rejected by evaluator: {'; '.join(concerns)}")
+        concerns = patch.get("evaluation_concerns", [])
+        if concerns:
+            raise ValueError(f"Patch rejected by self-evaluation: {'; '.join(concerns)}")
 
         return patch
 
-    def _call(self, messages: list, max_tokens: int) -> str:
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=max_tokens,
-            messages=messages,
-        )
-        return response.content[0].text.strip()
-
     def _parse_json(self, text: str) -> dict:
+        text = text.strip()
         if text.startswith("```"):
             text = text.split("```")[1]
             if text.startswith("json"):
@@ -119,12 +111,10 @@ class LocalClaudeRemediator:
         try:
             return json.loads(text.strip())
         except json.JSONDecodeError as e:
-            raise ValueError(f"Claude returned non-JSON: {e}\n{text[:200]}")
+            raise ValueError(f"Agent returned non-JSON: {e}\n{text[:200]}")
 
-    def _analyze_prompt(self, vuln: dict, source_code: str) -> str:
-        return f"""You are a security engineer performing a code review.
-
-Vulnerability report:
+    def _build_prompt(self, vuln: dict, source_code: str) -> str:
+        return f"""Vulnerability report:
 - Scanner: {vuln.get('scanner')}
 - Rule: {vuln.get('rule_id')}
 - Severity: {vuln.get('severity')}
@@ -132,12 +122,8 @@ Vulnerability report:
 - File: {vuln.get('file_path')}
 - Lines: {vuln.get('start_line')}–{vuln.get('end_line')}
 
-Code:
+Source code:
 {source_code}
 
-Analyze this finding:
-1. Is this a real vulnerability or a false positive? Why?
-2. What is the root cause?
-3. What is the potential impact?
-
-Respond in plain text."""
+Respond with ONLY a JSON object matching this schema:
+{PATCH_SCHEMA}"""
