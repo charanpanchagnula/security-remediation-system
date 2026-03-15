@@ -41,12 +41,14 @@ api_url = "$API_URL"
 with open(config_path) as f:
     config = json.load(f)
 
+env = {"SECREMEDIATOR_API_URL": api_url}
+api_key = os.environ.get("ANTHROPIC_API_KEY")
+if api_key:
+    env["ANTHROPIC_API_KEY"] = api_key
+
 config.setdefault("mcpServers", {})["secremediator"] = {
     "command": mcp_cmd,
-    "env": {
-        "SECREMEDIATOR_API_URL": api_url,
-        "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY", ""),
-    }
+    "env": env,
 }
 
 with open(config_path, "w") as f:

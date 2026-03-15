@@ -21,6 +21,7 @@ from mcp.types import Tool, TextContent
 from .client import SecRemediatorClient
 from .archiver import create_archive
 from .config import save_to_history, get_api_url
+from .cli import _apply_patch_changes
 from pathlib import Path
 
 API_URL = os.environ.get("SECREMEDIATOR_API_URL", get_api_url())
@@ -251,18 +252,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "revalidation_status": reval_status,
             }))]
 
-        applied_files = []
-        for change in patch.get("code_changes", []):
-            file_path = repo_path / change["file_path"].lstrip("/")
-            if not file_path.exists():
-                continue
-            lines = file_path.read_text().splitlines(keepends=True)
-            s = change["start_line"] - 1
-            e = change["end_line"]
-            new_lines = [change["new_code"] + "\n"] if change["new_code"] else []
-            lines[s:e] = new_lines
-            file_path.write_text("".join(lines))
-            applied_files.append(change["file_path"])
+        applied_files = _apply_patch_changes(repo_path, patch.get("code_changes", []))
 
         if applied_files:
             session_file = repo_path / ".security-scan" / "sessions" / f"{scan_id}.json"

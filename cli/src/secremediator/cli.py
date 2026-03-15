@@ -44,6 +44,23 @@ def _load_session(scan_dir: Path, scan_id: str) -> Optional[dict]:
     return json.loads(path.read_text())
 
 
+def _apply_patch_changes(base_path: Path, changes: list) -> list:
+    """Apply code_changes from a patch to files under base_path. Returns list of written file paths."""
+    written = []
+    for change in changes:
+        file_path = base_path / change["file_path"].lstrip("/")
+        if not file_path.exists():
+            continue
+        lines = file_path.read_text().splitlines(keepends=True)
+        s = change["start_line"] - 1
+        e = change["end_line"]
+        new_lines = [change["new_code"] + "\n"] if change["new_code"] else []
+        lines[s:e] = new_lines
+        file_path.write_text("".join(lines))
+        written.append(change["file_path"])
+    return written
+
+
 def _find_local_file(container_path: str) -> list:
     """Search CWD for a file matching the container path tail, trying progressively shorter suffixes."""
     parts = Path(container_path.lstrip("/")).parts
@@ -147,12 +164,8 @@ def scan(
     try:
         if Path(archive_path).exists():
             save_archive(scan_id, archive_path)
-            Path(archive_path).unlink()
-    except Exception:
-        try:
-            Path(archive_path).unlink(missing_ok=True)
-        except Exception:
-            pass
+    finally:
+        Path(archive_path).unlink(missing_ok=True)
     save_to_history({
         "scan_id": scan_id,
         "project_name": project_name,
@@ -454,10 +467,11 @@ def _run_revalidation(
     import tarfile, tempfile
     from .archiver import create_archive
 
+    vuln_id = vuln.get("id", "")
     archive_path = get_archive_path(original_scan_id)
     if not archive_path:
         return {
-            "vuln_id": vuln["id"],
+            "vuln_id": vuln_id,
             "original_scan_id": original_scan_id,
             "revalidation_scan_id": None,
             "patched_files": [],
@@ -500,7 +514,7 @@ def _run_revalidation(
             Path(reval_archive).unlink(missing_ok=True)
 
     reval_scan_id = result["scan_id"]
-    reval_data = _poll_until_complete(client, reval_scan_id, f"revalidation {vuln['id'][:8]}")
+    reval_data = _poll_until_complete(client, reval_scan_id, f"revalidation {vuln_id[:8]}")
     reval_vulns = reval_data.get("vulnerabilities", [])
 
     original_still_present = any(
@@ -530,7 +544,7 @@ def _run_revalidation(
         status = "FAIL_NEW_ISSUES"
 
     return {
-        "vuln_id": vuln["id"],
+        "vuln_id": vuln_id,
         "original_scan_id": original_scan_id,
         "revalidation_scan_id": reval_scan_id,
         "patched_files": patched_files,
@@ -635,6 +649,11 @@ def remediate_all(
             skipped += 1
             continue
 
+        if patch.get("is_false_positive"):
+            console.print(f"  [yellow]↩[/yellow] False positive — skipping revalidation")
+            skipped += 1
+            continue
+
         console.print(f"  [dim]Revalidating...[/dim]")
         try:
             reval = _run_revalidation(client, scan_id, vuln, patch, api_url or get_api_url())
@@ -718,44 +737,34 @@ def apply(
 
         changes = patch.get("code_changes", [])
         if not changes:
-            rprint(f"  [yellow]{vid[:8]}: no code_changes in patch.[/yellow]")
+            if patch.get("is_false_positive"):
+                console.print(f"  [yellow]↩[/yellow] {vid[:8]}: false positive — no changes to apply")
+            else:
+                rprint(f"  [yellow]{vid[:8]}: no code_changes in patch.[/yellow]")
             skipped += 1
             continue
 
         console.print(f"\n[cyan]{vid[:8]}[/cyan]  revalidation={reval_status}  confidence={patch.get('confidence_score', 0):.2f}")
 
-        files_written = 0
         for change in changes:
-            file_path = target / change["file_path"].lstrip("/")
-            if not file_path.exists():
-                rprint(f"  [red]File not found: {file_path}[/red]")
-                skipped += 1
-                continue
-
-            lines = file_path.read_text().splitlines(keepends=True)
-            s = change["start_line"] - 1
-            e = change["end_line"]
-            new_lines = [change["new_code"] + "\n"] if change["new_code"] else []
-
             console.print(f"  [dim]{change['file_path']}  lines {change['start_line']}–{change['end_line']}[/dim]")
             for l in change.get("original_code", "").splitlines():
                 console.print(f"  [red]- {l}[/red]")
             for l in change.get("new_code", "").splitlines():
                 console.print(f"  [green]+ {l}[/green]")
 
-            if not dry_run:
-                lines[s:e] = new_lines
-                file_path.write_text("".join(lines))
-                files_written += 1
-
         if not dry_run:
-            if files_written > 0:
+            written = _apply_patch_changes(target, changes)
+            if written:
                 session_file = _security_scan_dir(target) / "sessions" / f"{scan_id}.json"
                 if session_file.exists():
                     session = json.loads(session_file.read_text())
                     session.setdefault("remediation_status", {})[vid] = "applied"
                     session_file.write_text(json.dumps(session, indent=2))
                 applied += 1
+            else:
+                rprint(f"  [red]No files found on disk for {vid[:8]} — skipped.[/red]")
+                skipped += 1
         else:
             console.print(f"  [dim](dry-run — not written)[/dim]")
 
