@@ -43,6 +43,15 @@ class SecRemediatorClient:
         response.raise_for_status()
         return response.json()
 
+    def get_vulnerability(self, scan_id: str, vuln_id: str) -> dict:
+        """GET /api/v1/scans/{scan_id}/vulnerabilities/{vuln_id}"""
+        response = httpx.get(
+            f"{self.api_url}/api/v1/scans/{scan_id}/vulnerabilities/{vuln_id}",
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def request_remediation(self, scan_id: str, vuln_id: str) -> dict:
         """POST /api/v1/scan/{scan_id}/remediate/{vuln_id}"""
         response = httpx.post(
