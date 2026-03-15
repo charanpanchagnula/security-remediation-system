@@ -67,7 +67,7 @@ class LocalClaudeRemediator:
     Raises ValueError if the agent returns non-JSON or self-evaluation has concerns.
     """
 
-    def __init__(self, model: str = "claude-opus-4-6"):
+    def __init__(self, model: str = "claude-sonnet-4-6"):
         self.model = model
 
     def generate_patch(self, vulnerability: dict, source_code: str) -> dict:
