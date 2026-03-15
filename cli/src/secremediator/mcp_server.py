@@ -96,6 +96,55 @@ async def list_tools() -> list[Tool]:
                 "required": ["scan_id", "vuln_id"],
             },
         ),
+        Tool(
+            name="poll_scan_status",
+            description=(
+                "Lightweight status check on a running scan. Returns status and summary only — "
+                "no full findings payload. Call this in a loop (e.g. every 30s) while waiting for "
+                "long-running scans. Stop polling when status is 'completed' or 'failed'."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "scan_id": {"type": "string"},
+                },
+                "required": ["scan_id"],
+            },
+        ),
+        Tool(
+            name="list_scans",
+            description="List all previously submitted scans with their status from local history.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="apply_remediation",
+            description=(
+                "Apply a generated patch to the local file on disk. "
+                "Reads .security-scan/patches/<scan_id>/<vuln_id>/patch.json and writes new_code "
+                "to the affected lines in the file. Only applies if revalidation passed unless force=true. "
+                "Returns a summary of what changed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "scan_id": {"type": "string"},
+                    "vuln_id": {"type": "string"},
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Absolute path to the scanned repository root",
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Apply even if revalidation failed",
+                    },
+                },
+                "required": ["scan_id", "vuln_id", "repo_path"],
+            },
+        ),
     ]
 
 
@@ -150,6 +199,78 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             client.request_remediation, arguments["scan_id"], arguments["vuln_id"]
         )
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    elif name == "poll_scan_status":
+        data = await asyncio.to_thread(client.get_scan, arguments["scan_id"])
+        return [TextContent(type="text", text=json.dumps({
+            "scan_id": arguments["scan_id"],
+            "status": data.get("status"),
+            "summary": data.get("summary", {}),
+        }, indent=2))]
+
+    elif name == "list_scans":
+        from .config import load_history
+        history = load_history()
+        items = []
+        for entry in history:
+            try:
+                data = await asyncio.to_thread(client.get_scan, entry["scan_id"])
+                status = data.get("status", "unknown")
+            except Exception:
+                status = "unreachable"
+            items.append({
+                "scan_id": entry["scan_id"],
+                "project_name": entry.get("project_name"),
+                "submitted_at": entry.get("submitted_at"),
+                "status": status,
+            })
+        return [TextContent(type="text", text=json.dumps(items, indent=2))]
+
+    elif name == "apply_remediation":
+        scan_id = arguments["scan_id"]
+        vuln_id = arguments["vuln_id"]
+        repo_path = Path(arguments["repo_path"])
+        force = arguments.get("force", False)
+
+        patch_file = repo_path / ".security-scan" / "patches" / scan_id / vuln_id / "patch.json"
+        reval_file = repo_path / ".security-scan" / "patches" / scan_id / vuln_id / "revalidation.json"
+
+        if not patch_file.exists():
+            return [TextContent(type="text", text=json.dumps({"error": f"patch.json not found at {patch_file}"}))]
+
+        patch = json.loads(patch_file.read_text())
+
+        if reval_file.exists():
+            reval_status = json.loads(reval_file.read_text()).get("status", "UNKNOWN")
+        else:
+            reval_status = "NOT_RUN"
+
+        if reval_status != "PASS" and not force:
+            return [TextContent(type="text", text=json.dumps({
+                "error": f"Revalidation status is {reval_status}. Pass force=true to apply anyway.",
+                "revalidation_status": reval_status,
+            }))]
+
+        applied_files = []
+        for change in patch.get("code_changes", []):
+            file_path = repo_path / change["file_path"].lstrip("/")
+            if not file_path.exists():
+                continue
+            lines = file_path.read_text().splitlines(keepends=True)
+            s = change["start_line"] - 1
+            e = change["end_line"]
+            new_lines = [change["new_code"] + "\n"] if change["new_code"] else []
+            lines[s:e] = new_lines
+            file_path.write_text("".join(lines))
+            applied_files.append(change["file_path"])
+
+        return [TextContent(type="text", text=json.dumps({
+            "status": "applied",
+            "vuln_id": vuln_id,
+            "revalidation_status": reval_status,
+            "applied_files": applied_files,
+            "summary": patch.get("summary", ""),
+        }, indent=2))]
 
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 

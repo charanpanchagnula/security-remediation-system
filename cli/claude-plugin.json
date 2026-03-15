@@ -1,0 +1,19 @@
+{
+  "name": "secremediator",
+  "version": "0.1.0",
+  "description": "Security scanning and AI remediation for Claude Code. Runs semgrep, checkov, and trivy scans via a local Docker backend, generates patches using Claude or a configurable LLM, revalidates each fix, and applies passing patches to your codebase.",
+  "mcp": {
+    "command": "secremediator-mcp",
+    "env": {
+      "SECREMEDIATOR_API_URL": "http://localhost:8000",
+      "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}"
+    }
+  },
+  "skills": [
+    "skills/security-scan.md"
+  ],
+  "requirements": {
+    "docker": "Backend must be running: docker compose up -d (from security-remediation-system/)",
+    "install": "uv tool install . (from this directory, or: pip install -e .)"
+  }
+}
