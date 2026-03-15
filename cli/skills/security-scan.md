@@ -1,54 +1,51 @@
 ---
 name: security-scan
-description: >
-  Run a security scan on the current repository, or retrieve results for a previous scan.
-  Trigger when the developer says /security-scan, "scan my code", "run security scan",
-  or "show results for <scan_id>".
+description: Run a full security scan on the current repo, generate AI patches for all findings, revalidate each fix, and apply passing patches.
 ---
 
-# Security Scan
+## /security-scan
 
-## Trigger Mode (no scan_id provided)
+Runs the complete security remediation loop using the secremediator MCP server.
 
-1. Detect the project root — use the nearest `.git` directory from the current working directory.
-2. Call the `run_security_scan` MCP tool:
-   - `path`: absolute path to project root
-   - `project_name`: name of the root directory
-   - `author`: `$USER` env var, or ask the developer
-   - `scanners`: `["semgrep", "checkov", "trivy"]` unless specified otherwise
-3. Respond with:
+### Steps
 
-   ```
-   Scan submitted.
+1. **Start scan**
+   Call `run_security_scan` with:
+   - `path`: absolute path to the current workspace root
+   - `project_name`: name of the project (use the directory name)
+   - `scanners`: ["semgrep", "checkov", "trivy"]
 
-   Session ID: <scan_id>
-   Scanners: semgrep, checkov, trivy
+   Note the `scan_id` from the response.
 
-   Fast scanners (semgrep, checkov) typically finish in 2-5 minutes.
-   Vendor scanners may take longer.
+2. **Poll until complete**
+   Call `poll_scan_status` every 30 seconds until `status` is `"completed"` or `"failed"`.
+   Print a status update each poll so the developer sees progress.
 
-   When ready: say "show results for <scan_id>"
-   Or run:     secremediator results <scan_id>
-   ```
+3. **Review findings**
+   Call `get_scan_results` with the `scan_id`.
+   Show the developer a summary: total findings by severity.
 
-4. Do NOT poll or wait. Fire and forget.
+4. **Generate patches**
+   For each CRITICAL and HIGH finding:
+   a. Call `get_vulnerability_detail` to get full context and code snippet
+   b. Call `request_remediation` to trigger patch generation
+   c. Poll `poll_scan_status` until the remediation appears in results
 
-## Results Mode (scan_id provided)
+5. **Revalidation**
+   Revalidation runs automatically as part of `remediate-all` CLI command.
+   Each patch is tested by re-scanning with only the patched files replaced.
+   Status per patch: PASS | FAIL_STILL_VULNERABLE | FAIL_NEW_ISSUES | FAIL_BOTH
 
-1. Call `get_scan_results` with the scan_id.
-2. If status is `queued` or `in_progress`: tell the developer to check back later.
-3. If status is `completed`:
-   - Group findings: CRITICAL → HIGH → MEDIUM → LOW → INFO
-   - For each: scanner, file, line, rule_id, message (first 120 chars), vuln_id
-   - Show totals by severity
-   - Ask: "Would you like remediation for any of these?"
-4. If yes to remediation:
-   - Ask which finding, or offer to start with CRITICAL/HIGH
-   - Call `request_remediation(scan_id, vuln_id)`
-   - Show: explanation, suggested fix, confidence score
-   - Offer to continue with next finding
+6. **Apply passing patches**
+   For each patch with revalidation status PASS:
+   Call `apply_remediation` with `scan_id`, `vuln_id`, and `repo_path`.
 
-## Rules
-- Never auto-poll after submitting. Always fire-and-forget.
-- Always show the scan_id prominently.
-- Only call `request_remediation` when the developer explicitly asks.
+7. **Report to developer**
+   Summarise: N vulnerabilities found, M patches generated, K passed revalidation and applied.
+   List any FAIL patches that need manual review.
+
+### Notes
+- Scanning runs inside the Docker backend container — `docker compose up -d` must be running
+- For local Claude remediation instead of backend engine: use CLI `secremediator remediate-all <scan_id> --use-local-claude`
+- Patches and revalidation results are stored in `.security-scan/` inside the scanned repo (gitignored)
+- To apply patches manually: `secremediator apply <scan_id> --all`
