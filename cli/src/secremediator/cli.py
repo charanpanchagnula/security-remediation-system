@@ -154,18 +154,13 @@ def scan(
             )
         except Exception as e:
             rprint(f"[red]Upload failed:[/red] {e}")
-            try:
-                Path(archive_path).unlink(missing_ok=True)
-            except Exception:
-                pass
+            Path(archive_path).unlink(missing_ok=True)
             raise typer.Exit(1)
 
     scan_id = result["scan_id"]
-    try:
-        if Path(archive_path).exists():
-            save_archive(scan_id, archive_path)
-    finally:
-        Path(archive_path).unlink(missing_ok=True)
+    if Path(archive_path).exists():
+        save_archive(scan_id, archive_path)
+    Path(archive_path).unlink(missing_ok=True)
     save_to_history({
         "scan_id": scan_id,
         "project_name": project_name,
@@ -455,7 +450,6 @@ def _run_revalidation(
     original_scan_id: str,
     vuln: dict,
     patch: dict,
-    api_url: str,
 ) -> dict:
     """
     Revalidate a patch by:
@@ -534,14 +528,14 @@ def _run_revalidation(
         )
     ]
 
-    if not original_still_present and not new_issues:
-        status = "PASS"
-    elif original_still_present and new_issues:
+    if original_still_present and new_issues:
         status = "FAIL_BOTH"
     elif original_still_present:
         status = "FAIL_STILL_VULNERABLE"
-    else:
+    elif new_issues:
         status = "FAIL_NEW_ISSUES"
+    else:
+        status = "PASS"
 
     return {
         "vuln_id": vuln_id,
@@ -656,7 +650,7 @@ def remediate_all(
 
         console.print(f"  [dim]Revalidating...[/dim]")
         try:
-            reval = _run_revalidation(client, scan_id, vuln, patch, api_url or get_api_url())
+            reval = _run_revalidation(client, scan_id, vuln, patch)
             reval_file.write_text(json.dumps(reval, indent=2))
             if reval["status"] == "PASS":
                 console.print(f"  [green]✓[/green] Revalidation PASS")

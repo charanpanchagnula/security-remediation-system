@@ -20,7 +20,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 from .client import SecRemediatorClient
 from .archiver import create_archive
-from .config import save_to_history, get_api_url
+from .config import save_to_history, load_history, get_api_url
 from .cli import _apply_patch_changes
 from pathlib import Path
 
@@ -210,7 +210,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         }, indent=2))]
 
     elif name == "list_scans":
-        from .config import load_history
         history = load_history()
         items = []
         for entry in history:
