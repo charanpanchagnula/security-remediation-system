@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     # LLM Settings
     DEEPSEEK_API_KEY: Optional[str] = None
     OPENAI_API_KEY: Optional[str] = None
+    ANTHROPIC_API_KEY: Optional[str] = None
     
     # GitHub Settings
     GITHUB_TOKEN: Optional[str] = None

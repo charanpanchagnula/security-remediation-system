@@ -41,6 +41,16 @@ class DeepSeekProvider(LLMProvider):
             api_key=settings.DEEPSEEK_API_KEY
         )
 
+class AnthropicProvider(LLMProvider):
+    """Anthropic Claude implementation."""
+
+    def get_model(self, model_id: Optional[str] = None) -> Model:
+        from agno.models.anthropic import Claude
+        return Claude(
+            id=model_id or "claude-sonnet-4-5",
+            api_key=settings.ANTHROPIC_API_KEY,
+        )
+
 class MockProvider(LLMProvider):
     """Mock implementation for local testing without API credits."""
     
@@ -64,10 +74,10 @@ class MockProvider(LLMProvider):
 
 def get_provider() -> LLMProvider:
     """Factory to get the configured provider."""
-    # Use DeepSeek if key is configured, regardless of env
+    if settings.ANTHROPIC_API_KEY:
+        return AnthropicProvider()
     if settings.DEEPSEEK_API_KEY:
         return DeepSeekProvider()
-        
     if settings.APP_ENV == "local_mock":
         return MockProvider()
     return DeepSeekProvider()
