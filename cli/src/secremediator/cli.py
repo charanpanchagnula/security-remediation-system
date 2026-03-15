@@ -553,7 +553,7 @@ def _run_revalidation(
 @app.command("remediate-all")
 def remediate_all(
     scan_id: str = typer.Argument(..., help="Scan ID to remediate"),
-    use_local_claude: bool = typer.Option(False, "--use-local-claude", help="Use local Claude via Anthropic SDK instead of backend engine"),
+    use_local_claude: bool = typer.Option(False, "--use-local-claude", help="Use local Claude via Claude Code (no API key needed) instead of backend engine"),
     severity: Optional[str] = typer.Option(None, "--severity", help="Comma-separated severities to include, e.g. CRITICAL,HIGH"),
     api_url: Optional[str] = typer.Option(None, "--api-url"),
 ):
