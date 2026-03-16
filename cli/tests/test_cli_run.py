@@ -49,3 +49,80 @@ def test_submit_scan_job_archives_uploads_saves(tmp_path):
     assert session["scan_id"] == fake_scan_id
     assert session["status"] == "queued"
     assert session["vulnerability_ids"] == []
+
+
+def test_run_remediate_all_loop_returns_summary(tmp_path):
+    """_run_remediate_all_loop polls, generates patches, revalidates, returns summary dict."""
+    from secremediator.cli import _run_remediate_all_loop
+
+    scan_data = {
+        "status": "completed",
+        "summary": {"total_vulnerabilities": 1},
+        "vulnerabilities": [
+            {
+                "id": "vuln-001",
+                "severity": "HIGH",
+                "rule_id": "python.sqli",
+                "file_path": "app/db.py",
+                "start_line": 10,
+                "end_line": 12,
+            }
+        ],
+    }
+    patch_data = {
+        "summary": "Fixed SQLi",
+        "confidence_score": 0.9,
+        "is_false_positive": False,
+        "code_changes": [],
+        "security_implications": [],
+    }
+    reval_data = {"status": "SKIPPED_NO_ARCHIVE", "vuln_id": "vuln-001"}
+
+    mock_client = MagicMock()
+    mock_client.get_scan.return_value = scan_data
+    mock_client.request_remediation.return_value = {"status": "completed"}
+
+    with patch("secremediator.cli._poll_until_complete", return_value=scan_data), \
+         patch("secremediator.cli._run_revalidation", return_value=reval_data), \
+         patch("secremediator.cli.get_archive_path", return_value=None):
+
+        # Patch the remediation polling loop to return patch immediately
+        mock_scan_with_rems = {
+            **scan_data,
+            "remediations": [
+                {
+                    "vulnerability_id": "vuln-001",
+                    **patch_data,
+                }
+            ],
+        }
+        mock_client.get_scan.side_effect = [scan_data, mock_scan_with_rems]
+
+        result = _run_remediate_all_loop(
+            client=mock_client,
+            scan_id="scan-001",
+            target=tmp_path,
+            quiet=True,
+        )
+
+    assert "passed" in result
+    assert "failed" in result
+    assert "skipped" in result
+    assert "total_vulns" in result
+    assert result["total_vulns"] == 1
+
+
+def test_run_remediate_all_loop_raises_on_failed_scan(tmp_path):
+    """_run_remediate_all_loop raises RuntimeError if scan failed."""
+    from secremediator.cli import _run_remediate_all_loop
+
+    mock_client = MagicMock()
+
+    with patch("secremediator.cli._poll_until_complete", return_value={"status": "failed"}):
+        with pytest.raises(RuntimeError, match="Scan failed"):
+            _run_remediate_all_loop(
+                client=mock_client,
+                scan_id="scan-bad",
+                target=tmp_path,
+                quiet=True,
+            )
