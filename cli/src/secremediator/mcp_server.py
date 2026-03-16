@@ -21,7 +21,7 @@ from mcp.types import Tool, TextContent
 from .client import SecRemediatorClient
 from .archiver import create_archive
 from .config import save_to_history, load_history, get_api_url, save_archive, get_archive_path
-from .cli import _apply_patch_changes
+from .cli import _apply_patch_changes, _run_remediate_all_loop, _ensure_security_scan_dir, _security_scan_dir, _submit_scan_job
 from pathlib import Path
 
 API_URL = os.environ.get("SECREMEDIATOR_API_URL", get_api_url())
@@ -185,6 +185,66 @@ async def list_tools() -> list[Tool]:
                     },
                 },
                 "required": ["scan_id", "vuln_id", "repo_path"],
+            },
+        ),
+        Tool(
+            name="remediate_all",
+            description=(
+                "Run full remediation loop for a completed scan. "
+                "Polls scan to completion, generates AI patches for all vulnerabilities, revalidates each patch. "
+                "Long-running blocking call. Returns summary with passed/failed/skipped counts."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "scan_id": {"type": "string"},
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Absolute path to the scanned repository root",
+                    },
+                    "severity": {
+                        "type": "string",
+                        "description": "Comma-separated severities to include, e.g. CRITICAL,HIGH. Omit for all.",
+                    },
+                    "use_local_claude": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Use local Claude Agent SDK instead of backend engine",
+                    },
+                },
+                "required": ["scan_id", "repo_path"],
+            },
+        ),
+        Tool(
+            name="run_full_pipeline",
+            description=(
+                "Run complete security pipeline in one call: archive → submit → wait for results → patch all → revalidate. "
+                "Long-running blocking call. Returns scan_id and remediation summary."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to directory to scan",
+                    },
+                    "project_name": {"type": "string"},
+                    "author": {"type": "string"},
+                    "scanners": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "default": ["semgrep", "checkov", "trivy"],
+                    },
+                    "severity": {
+                        "type": "string",
+                        "description": "Comma-separated severities to include. Omit for all.",
+                    },
+                    "use_local_claude": {
+                        "type": "boolean",
+                        "default": False,
+                    },
+                },
+                "required": ["path", "project_name"],
             },
         ),
     ]
@@ -374,6 +434,68 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             "revalidation_status": reval_status,
             "applied_files": applied_files,
             "summary": patch.get("summary", ""),
+        }, indent=2))]
+
+    elif name == "remediate_all":
+        scan_id = arguments["scan_id"]
+        repo_path = Path(arguments["repo_path"])
+        severity = arguments.get("severity")
+        use_local_claude = arguments.get("use_local_claude", False)
+
+        result = await asyncio.to_thread(
+            _run_remediate_all_loop,
+            client,
+            scan_id,
+            repo_path,
+            severity,
+            use_local_claude,
+            True,  # quiet=True — suppress console output on stdio wire
+        )
+
+        return [TextContent(type="text", text=json.dumps({
+            "scan_id": scan_id,
+            "passed": result["passed"],
+            "failed": result["failed"],
+            "skipped": result["skipped"],
+            "total_vulns": result["total_vulns"],
+            "patches_dir": result["patches_dir"],
+        }, indent=2))]
+
+    elif name == "run_full_pipeline":
+        path = arguments["path"]
+        project_name = arguments["project_name"]
+        author = arguments.get("author", os.environ.get("USER", "unknown"))
+        scanners = arguments.get("scanners", ["semgrep", "checkov", "trivy"])
+        severity = arguments.get("severity")
+        use_local_claude = arguments.get("use_local_claude", False)
+        target = Path(path)
+
+        scan_id, scan_dir = await asyncio.to_thread(
+            _submit_scan_job,
+            target,
+            project_name,
+            author,
+            scanners,
+            API_URL,
+        )
+
+        result = await asyncio.to_thread(
+            _run_remediate_all_loop,
+            client,
+            scan_id,
+            target,
+            severity,
+            use_local_claude,
+            True,  # quiet=True
+        )
+
+        return [TextContent(type="text", text=json.dumps({
+            "scan_id": scan_id,
+            "passed": result["passed"],
+            "failed": result["failed"],
+            "skipped": result["skipped"],
+            "total_vulns": result["total_vulns"],
+            "patches_dir": result["patches_dir"],
         }, indent=2))]
 
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
