@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "secremediator": {
+      "command": "secremediator-mcp",
+      "env": {
+        "SECREMEDIATOR_API_URL": "${SECREMEDIATOR_API_URL}"
+      }
+    }
+  }
+}
