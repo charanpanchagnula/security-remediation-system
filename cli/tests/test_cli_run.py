@@ -15,7 +15,7 @@ def test_submit_scan_job_archives_uploads_saves(tmp_path):
          patch("secremediator.cli.SecRemediatorClient") as MockClient, \
          patch("secremediator.cli.save_archive") as mock_save_archive, \
          patch("secremediator.cli.save_to_history") as mock_save_history, \
-         patch("pathlib.Path.unlink"):
+         patch("secremediator.cli.Path.unlink"):
 
         mock_client = MockClient.return_value
         mock_client.upload_scan.return_value = {"scan_id": fake_scan_id}

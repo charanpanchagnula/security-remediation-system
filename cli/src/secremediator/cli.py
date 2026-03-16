@@ -133,16 +133,19 @@ def _submit_scan_job(
         scanners=scanner_list,
     )
     scan_id = result["scan_id"]
-    if Path(archive_path).exists():
-        save_archive(scan_id, archive_path)
-    Path(archive_path).unlink(missing_ok=True)
+    try:
+        if Path(archive_path).exists():
+            save_archive(scan_id, archive_path)
+    finally:
+        Path(archive_path).unlink(missing_ok=True)
+    submitted_at = datetime.utcnow().isoformat()
     save_to_history({
         "scan_id": scan_id,
         "project_name": project_name,
         "author": author_name,
         "scanners": scanner_list,
         "path": str(target),
-        "submitted_at": datetime.utcnow().isoformat(),
+        "submitted_at": submitted_at,
         "api_url": api_url or get_api_url(),
     })
     scan_dir = _ensure_security_scan_dir(target)
@@ -152,7 +155,7 @@ def _submit_scan_job(
         "author": author_name,
         "scanners": scanner_list,
         "path": str(target),
-        "submitted_at": datetime.utcnow().isoformat(),
+        "submitted_at": submitted_at,
         "api_url": api_url or get_api_url(),
         "status": "queued",
         "summary": {},
