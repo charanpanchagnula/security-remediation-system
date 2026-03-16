@@ -793,6 +793,7 @@ def run(
             target=target,
             severity=severity,
             use_local_claude=use_local_claude,
+            quiet=True,
         )
     except RuntimeError as e:
         rprint(f"[red]{e}[/red]")
