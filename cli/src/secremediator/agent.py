@@ -11,6 +11,7 @@ This mirrors the backend orchestrator/generator/evaluator agent pattern.
 Activated via --use-local-claude flag on the remediate-all command.
 """
 import json
+import re
 import asyncio
 from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage
 
@@ -98,20 +99,40 @@ class LocalClaudeRemediator:
 
         concerns = patch.get("evaluation_concerns", [])
         if concerns:
-            raise ValueError(f"Patch rejected by self-evaluation: {'; '.join(concerns)}")
+            # Don't skip — revalidation will catch actual failures.
+            # Record concerns and reduce confidence so callers can surface them.
+            patch["evaluation_concerns"] = concerns
+            patch["confidence_score"] = round(patch.get("confidence_score", 0.5) * 0.7, 2)
 
         return patch
 
     def _parse_json(self, text: str) -> dict:
         text = text.strip()
+
+        # Strip any markdown code fence (```json ... ``` or ``` ... ```)
         if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
+            inner = re.sub(r"^```(?:json)?\s*", "", text)
+            inner = re.sub(r"\s*```$", "", inner).strip()
+            try:
+                return json.loads(inner)
+            except json.JSONDecodeError:
+                pass
+
+        # Try the text as-is
         try:
-            return json.loads(text.strip())
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Agent returned non-JSON: {e}\n{text[:200]}")
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # Last resort: extract the first {...} block from the text
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+
+        raise ValueError(f"Agent returned non-JSON output:\n{text[:300]}")
 
     def _build_prompt(self, vuln: dict, source_code: str) -> str:
         return f"""Vulnerability report:

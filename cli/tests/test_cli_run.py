@@ -147,7 +147,9 @@ def test_run_command_chains_scan_and_remediate(tmp_path):
     mock_submit.assert_called_once()
     mock_loop.assert_called_once()
     assert "run-scan-001" in result.output
-    assert "2 PASS" in result.output
+    # Summary output comes from _run_remediate_all_loop itself (not duplicated in run command)
+    call_kwargs = mock_loop.call_args
+    assert call_kwargs.kwargs.get("quiet") is False
 
 
 def test_run_command_passes_severity_filter(tmp_path):
