@@ -20,7 +20,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 from .client import SecRemediatorClient
 from .archiver import create_archive
-from .config import save_to_history, load_history, get_api_url
+from .config import save_to_history, load_history, get_api_url, save_archive, get_archive_path
 from .cli import _apply_patch_changes
 from pathlib import Path
 
@@ -118,6 +118,47 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {},
+            },
+        ),
+        Tool(
+            name="sync_sessions",
+            description=(
+                "Refresh scan status for all sessions in .security-scan/ of a local repo. "
+                "Returns list of sessions with their current status from backend."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Absolute path to the scanned repository root",
+                    }
+                },
+                "required": ["repo_path"],
+            },
+        ),
+        Tool(
+            name="apply_all_remediations",
+            description=(
+                "Apply all patches that passed revalidation for a given scan. "
+                "Reads .security-scan/patches/<scan_id>/*/patch.json and writes new_code to disk. "
+                "Skips patches that failed revalidation unless force=true."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "scan_id": {"type": "string"},
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Absolute path to the scanned repository root",
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Apply even patches that failed revalidation",
+                    },
+                },
+                "required": ["scan_id", "repo_path"],
             },
         ),
         Tool(
@@ -225,6 +266,73 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "status": status,
             })
         return [TextContent(type="text", text=json.dumps(items, indent=2))]
+
+    elif name == "sync_sessions":
+        repo_path = Path(arguments["repo_path"])
+        sessions_dir = repo_path / ".security-scan" / "sessions"
+        if not sessions_dir.exists():
+            return [TextContent(type="text", text=json.dumps({"sessions": [], "message": "No .security-scan/ found."}))]
+
+        results = []
+        for session_file in sessions_dir.glob("*.json"):
+            session = json.loads(session_file.read_text())
+            scan_id = session["scan_id"]
+            try:
+                data = await asyncio.to_thread(client.get_scan, scan_id)
+                session["status"] = data.get("status", "unknown")
+                session["summary"] = data.get("summary", {})
+                session["vulnerability_ids"] = [v["id"] for v in data.get("vulnerabilities", [])]
+                session["last_synced_at"] = datetime.utcnow().isoformat()
+                session_file.write_text(json.dumps(session, indent=2))
+                results.append({"scan_id": scan_id, "status": session["status"], "summary": session["summary"]})
+            except Exception as e:
+                results.append({"scan_id": scan_id, "status": "error", "error": str(e)})
+
+        return [TextContent(type="text", text=json.dumps({"sessions": results}, indent=2))]
+
+    elif name == "apply_all_remediations":
+        scan_id = arguments["scan_id"]
+        repo_path = Path(arguments["repo_path"])
+        force = arguments.get("force", False)
+        patches_base = repo_path / ".security-scan" / "patches" / scan_id
+
+        if not patches_base.exists():
+            return [TextContent(type="text", text=json.dumps({"error": f"No patches found at {patches_base}"}))]
+
+        applied = []
+        skipped = []
+
+        for patch_dir in patches_base.iterdir():
+            if not patch_dir.is_dir():
+                continue
+            patch_file = patch_dir / "patch.json"
+            reval_file = patch_dir / "revalidation.json"
+            if not patch_file.exists():
+                continue
+
+            patch = json.loads(patch_file.read_text())
+            vid = patch.get("vuln_id", patch_dir.name)
+            reval_status = json.loads(reval_file.read_text()).get("status", "UNKNOWN") if reval_file.exists() else "NOT_RUN"
+
+            if reval_status != "PASS" and not force:
+                skipped.append({"vuln_id": vid, "reason": f"revalidation {reval_status}"})
+                continue
+
+            applied_files = _apply_patch_changes(repo_path, patch.get("code_changes", []))
+            if applied_files:
+                session_file = repo_path / ".security-scan" / "sessions" / f"{scan_id}.json"
+                if session_file.exists():
+                    session = json.loads(session_file.read_text())
+                    session.setdefault("remediation_status", {})[vid] = "applied"
+                    session_file.write_text(json.dumps(session, indent=2))
+            applied.append({"vuln_id": vid, "applied_files": applied_files, "revalidation_status": reval_status})
+
+        return [TextContent(type="text", text=json.dumps({
+            "applied": applied,
+            "skipped": skipped,
+            "total_applied": len(applied),
+            "total_skipped": len(skipped),
+        }, indent=2))]
 
     elif name == "apply_remediation":
         scan_id = arguments["scan_id"]
