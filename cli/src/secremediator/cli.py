@@ -116,6 +116,53 @@ def _offer_editor_open(scan_id: str, ready_rems: list) -> None:
         subprocess.run([editor, f"+{line}", str(local_file)])
 
 
+def _submit_scan_job(
+    target: Path,
+    project_name: str,
+    author_name: str,
+    scanner_list: list,
+    api_url: Optional[str],
+) -> tuple:
+    """Archive, upload, persist to history and .security-scan/. Returns (scan_id, scan_dir)."""
+    archive_path = create_archive(str(target))
+    client = SecRemediatorClient(api_url=api_url)
+    result = client.upload_scan(
+        archive_path=archive_path,
+        project_name=project_name,
+        author=author_name,
+        scanners=scanner_list,
+    )
+    scan_id = result["scan_id"]
+    if Path(archive_path).exists():
+        save_archive(scan_id, archive_path)
+    Path(archive_path).unlink(missing_ok=True)
+    save_to_history({
+        "scan_id": scan_id,
+        "project_name": project_name,
+        "author": author_name,
+        "scanners": scanner_list,
+        "path": str(target),
+        "submitted_at": datetime.utcnow().isoformat(),
+        "api_url": api_url or get_api_url(),
+    })
+    scan_dir = _ensure_security_scan_dir(target)
+    _save_session(scan_dir, {
+        "scan_id": scan_id,
+        "project_name": project_name,
+        "author": author_name,
+        "scanners": scanner_list,
+        "path": str(target),
+        "submitted_at": datetime.utcnow().isoformat(),
+        "api_url": api_url or get_api_url(),
+        "status": "queued",
+        "summary": {},
+        "vulnerability_ids": [],
+        "remediation_status": {},
+        "last_synced_at": None,
+    })
+    return (scan_id, scan_dir)
+
+
 @app.command()
 def scan(
     path: str = typer.Argument(".", help="Directory to scan"),
@@ -137,55 +184,20 @@ def scan(
     console.print(f"\n[bold]Scanning:[/bold] {target}")
     console.print(f"[dim]Project:[/dim] {project_name}  [dim]Author:[/dim] {author_name}  [dim]Scanners:[/dim] {', '.join(scanner_list)}\n")
 
-    with console.status("[bold green]Creating archive..."):
-        archive_path = create_archive(str(target))
-
-    size_kb = Path(archive_path).stat().st_size // 1024
-    console.print(f"[green]✓[/green] Archive ready ({size_kb} KB)")
-
-    client = SecRemediatorClient(api_url=api_url)
-    with console.status("[bold green]Uploading..."):
+    with console.status("[bold green]Archiving and uploading..."):
         try:
-            result = client.upload_scan(
-                archive_path=archive_path,
+            scan_id, scan_dir = _submit_scan_job(
+                target=target,
                 project_name=project_name,
-                author=author_name,
-                scanners=scanner_list,
+                author_name=author_name,
+                scanner_list=scanner_list,
+                api_url=api_url,
             )
         except Exception as e:
             rprint(f"[red]Upload failed:[/red] {e}")
-            Path(archive_path).unlink(missing_ok=True)
             raise typer.Exit(1)
 
-    scan_id = result["scan_id"]
-    if Path(archive_path).exists():
-        save_archive(scan_id, archive_path)
-    Path(archive_path).unlink(missing_ok=True)
-    save_to_history({
-        "scan_id": scan_id,
-        "project_name": project_name,
-        "author": author_name,
-        "scanners": scanner_list,
-        "path": str(target),
-        "submitted_at": datetime.utcnow().isoformat(),
-        "api_url": api_url or get_api_url(),
-    })
-
-    scan_dir = _ensure_security_scan_dir(target)
-    _save_session(scan_dir, {
-        "scan_id": scan_id,
-        "project_name": project_name,
-        "author": author_name,
-        "scanners": scanner_list,
-        "path": str(target),
-        "submitted_at": datetime.utcnow().isoformat(),
-        "api_url": api_url or get_api_url(),
-        "status": "queued",
-        "summary": {},
-        "vulnerability_ids": [],
-        "remediation_status": {},
-        "last_synced_at": None,
-    })
+    console.print(f"[green]✓[/green] Archive ready and uploaded")
 
     console.print(f"\n[green]✓[/green] Scan queued.")
     console.print(f"\n  [bold]Session ID:[/bold] {scan_id}")
@@ -576,6 +588,16 @@ def remediate_all(
     if data.get("status") == "failed":
         rprint("[red]Scan failed.[/red]")
         raise typer.Exit(1)
+
+    # Persist scan results into the session file now that we have real data
+    session_file = scan_dir / "sessions" / f"{scan_id}.json"
+    if session_file.exists():
+        session = json.loads(session_file.read_text())
+        session["status"] = data.get("status", "completed")
+        session["summary"] = data.get("summary", {})
+        session["vulnerability_ids"] = [v["id"] for v in data.get("vulnerabilities", [])]
+        session["last_synced_at"] = datetime.utcnow().isoformat()
+        session_file.write_text(json.dumps(session, indent=2))
 
     vulns = data.get("vulnerabilities", [])
     if severity:
