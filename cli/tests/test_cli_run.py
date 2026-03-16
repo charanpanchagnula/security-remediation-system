@@ -126,3 +126,43 @@ def test_run_remediate_all_loop_raises_on_failed_scan(tmp_path):
                 target=tmp_path,
                 quiet=True,
             )
+
+
+def test_run_command_chains_scan_and_remediate(tmp_path):
+    """run command calls _submit_scan_job then _run_remediate_all_loop."""
+    from typer.testing import CliRunner
+    from secremediator.cli import app
+    runner = CliRunner()
+
+    fake_scan_id = "run-scan-001"
+    fake_scan_dir = tmp_path / ".security-scan"
+    fake_result = {"passed": 2, "failed": 0, "skipped": 1, "patches_dir": str(tmp_path), "total_vulns": 3}
+
+    with patch("secremediator.cli._submit_scan_job", return_value=(fake_scan_id, fake_scan_dir)) as mock_submit, \
+         patch("secremediator.cli._run_remediate_all_loop", return_value=fake_result) as mock_loop, \
+         patch("secremediator.cli.SecRemediatorClient"):
+        result = runner.invoke(app, ["run", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    mock_submit.assert_called_once()
+    mock_loop.assert_called_once()
+    assert "run-scan-001" in result.output
+    assert "2 PASS" in result.output
+
+
+def test_run_command_passes_severity_filter(tmp_path):
+    """run command passes --severity through to _run_remediate_all_loop."""
+    from typer.testing import CliRunner
+    from secremediator.cli import app
+    runner = CliRunner()
+
+    fake_result = {"passed": 1, "failed": 0, "skipped": 0, "patches_dir": str(tmp_path), "total_vulns": 1}
+
+    with patch("secremediator.cli._submit_scan_job", return_value=("scan-sev", tmp_path / ".security-scan")), \
+         patch("secremediator.cli._run_remediate_all_loop", return_value=fake_result) as mock_loop, \
+         patch("secremediator.cli.SecRemediatorClient"):
+        result = runner.invoke(app, ["run", str(tmp_path), "--severity", "CRITICAL,HIGH"])
+
+    assert result.exit_code == 0, result.output
+    call_kwargs = mock_loop.call_args
+    assert call_kwargs.kwargs.get("severity") == "CRITICAL,HIGH" or (call_kwargs.args and "CRITICAL,HIGH" in str(call_kwargs.args))

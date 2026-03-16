@@ -749,6 +749,61 @@ def remediate_all(
 
 
 @app.command()
+def run(
+    path: str = typer.Argument(".", help="Directory to scan and remediate in one shot"),
+    scanners: str = typer.Option("semgrep,checkov,trivy", "--scanners", "-s"),
+    author: str = typer.Option("", "--author", "-a", help="Your name for audit trail"),
+    project: str = typer.Option("", "--project", "-p", help="Project name (defaults to dir name)"),
+    severity: Optional[str] = typer.Option(None, "--severity", help="Comma-separated severities: CRITICAL,HIGH"),
+    use_local_claude: bool = typer.Option(False, "--use-local-claude", help="Use local Claude Agent SDK instead of backend engine"),
+    api_url: Optional[str] = typer.Option(None, "--api-url"),
+):
+    """Scan a directory and immediately remediate all findings in one shot."""
+    target = Path(path).resolve()
+    if not target.is_dir():
+        rprint(f"[red]Error:[/red] '{path}' is not a directory.")
+        raise typer.Exit(1)
+
+    project_name = project or target.name
+    author_name = author or os.environ.get("USER", "unknown")
+    scanner_list = [s.strip() for s in scanners.split(",") if s.strip()]
+
+    console.print(f"\n[bold]Running full pipeline:[/bold] {target}")
+
+    try:
+        scan_id, scan_dir = _submit_scan_job(
+            target=target,
+            project_name=project_name,
+            author_name=author_name,
+            scanner_list=scanner_list,
+            api_url=api_url,
+        )
+    except Exception as e:
+        rprint(f"[red]Upload failed:[/red] {e}")
+        raise typer.Exit(1)
+
+    console.print(f"\n[green]✓[/green] Scan queued. [dim]{scan_id}[/dim]")
+
+    client = SecRemediatorClient(api_url=api_url)
+
+    try:
+        result = _run_remediate_all_loop(
+            client=client,
+            scan_id=scan_id,
+            target=target,
+            severity=severity,
+            use_local_claude=use_local_claude,
+        )
+    except RuntimeError as e:
+        rprint(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]Done.[/bold]  ✓ {result['passed']} PASS  ⚠ {result['failed']} FAIL  — {result['skipped']} skipped")
+    console.print(f"Patches in: [cyan]{scan_dir / 'patches' / scan_id}[/cyan]")
+    console.print(f"Apply with: [cyan]secremediator apply {scan_id} --all[/cyan]\n")
+
+
+@app.command()
 def apply(
     scan_id: str = typer.Argument(..., help="Scan ID whose patches to apply"),
     vuln_id: Optional[str] = typer.Option(None, "--vuln", help="Apply a single vulnerability's patch"),
