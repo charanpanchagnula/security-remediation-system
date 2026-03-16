@@ -637,6 +637,14 @@ def _run_remediate_all_loop(
         if not quiet:
             console.print(f"\n[cyan]▸[/cyan] {vuln.get('severity')} {vuln.get('rule_id')}  {vuln.get('file_path')}:{vuln.get('start_line')}")
 
+        _LOCK_FILES = {"uv.lock", "poetry.lock", "package-lock.json", "yarn.lock",
+                       "Pipfile.lock", "Gemfile.lock", "go.sum", "cargo.lock"}
+        if use_local_claude and Path(vuln.get("file_path", "")).name in _LOCK_FILES:
+            if not quiet:
+                console.print(f"  [dim]↩ Lock file — cannot patch directly. Fix manually with your package manager.[/dim]")
+            skipped += 1
+            continue
+
         try:
             if use_local_claude:
                 vuln_detail = client.get_vulnerability(scan_id, vuln_id)
@@ -787,21 +795,17 @@ def run(
     client = SecRemediatorClient(api_url=api_url)
 
     try:
-        result = _run_remediate_all_loop(
+        _run_remediate_all_loop(
             client=client,
             scan_id=scan_id,
             target=target,
             severity=severity,
             use_local_claude=use_local_claude,
-            quiet=True,
+            quiet=False,
         )
     except RuntimeError as e:
         rprint(f"[red]{e}[/red]")
         raise typer.Exit(1)
-
-    console.print(f"\n[bold]Done.[/bold]  ✓ {result['passed']} PASS  ⚠ {result['failed']} FAIL  — {result['skipped']} skipped")
-    console.print(f"Patches in: [cyan]{scan_dir / 'patches' / scan_id}[/cyan]")
-    console.print(f"Apply with: [cyan]secremediator apply {scan_id} --all[/cyan]\n")
 
 
 @app.command()
