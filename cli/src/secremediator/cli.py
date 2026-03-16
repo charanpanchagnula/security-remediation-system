@@ -445,18 +445,21 @@ def sync(
             rprint(f"[red]✗[/red] {scan_id[:8]}...  {e}")
 
 
-def _poll_until_complete(client: SecRemediatorClient, scan_id: str, label: str = "") -> dict:
+def _poll_until_complete(client: SecRemediatorClient, scan_id: str, label: str = "", quiet: bool = False) -> dict:
     """Poll a scan every 10s, printing a dot per poll, until status is terminal."""
     import time
     terminal = {"completed", "failed"}
-    console.print(f"[dim]Polling {label or scan_id[:8]}...[/dim] ", end="")
+    if not quiet:
+        console.print(f"[dim]Polling {label or scan_id[:8]}...[/dim] ", end="")
     while True:
         data = client.get_scan(scan_id)
         status = data.get("status", "unknown")
         if status in terminal:
-            console.print(f" {status}")
+            if not quiet:
+                console.print(f" {status}")
             return data
-        console.print(".", end="", highlight=False)
+        if not quiet:
+            console.print(".", end="", highlight=False)
         time.sleep(10)
 
 
@@ -565,32 +568,29 @@ def _run_revalidation(
     }
 
 
-@app.command("remediate-all")
-def remediate_all(
-    scan_id: str = typer.Argument(..., help="Scan ID to remediate"),
-    use_local_claude: bool = typer.Option(False, "--use-local-claude", help="Use local Claude via Claude Code (no API key needed) instead of backend engine"),
-    severity: Optional[str] = typer.Option(None, "--severity", help="Comma-separated severities to include, e.g. CRITICAL,HIGH"),
-    api_url: Optional[str] = typer.Option(None, "--api-url"),
-):
-    """Run full remediation loop: poll -> patch -> revalidate. Patches land in .security-scan/."""
+def _run_remediate_all_loop(
+    client: "SecRemediatorClient",
+    scan_id: str,
+    target: Path,
+    severity: Optional[str] = None,
+    use_local_claude: bool = False,
+    quiet: bool = False,
+) -> dict:
+    """
+    Poll scan to completion, generate + revalidate patches for all vulns.
+    Saves patch.json and revalidation.json to .security-scan/patches/<scan_id>/<vuln_id>/.
+    Returns {"passed": int, "failed": int, "skipped": int, "patches_dir": str, "total_vulns": int}.
+    """
     import time
-    client = SecRemediatorClient(api_url=api_url)
 
-    history = load_history()
-    entry = next((e for e in history if e["scan_id"] == scan_id), None)
-    if not entry:
-        rprint(f"[red]Scan {scan_id} not found in history.[/red]")
-        raise typer.Exit(1)
+    if not quiet:
+        console.print(f"\n[bold]Waiting for scan to complete...[/bold]")
+    data = _poll_until_complete(client, scan_id, quiet=quiet)
+    if data.get("status") == "failed":
+        raise RuntimeError("Scan failed.")
 
-    target = Path(entry["path"])
     scan_dir = _ensure_security_scan_dir(target)
     patches_base = scan_dir / "patches" / scan_id
-
-    console.print(f"\n[bold]Waiting for scan to complete...[/bold]")
-    data = _poll_until_complete(client, scan_id)
-    if data.get("status") == "failed":
-        rprint("[red]Scan failed.[/red]")
-        raise typer.Exit(1)
 
     # Persist scan results into the session file now that we have real data
     session_file = scan_dir / "sessions" / f"{scan_id}.json"
@@ -608,16 +608,22 @@ def remediate_all(
         vulns = [v for v in vulns if v.get("severity", "").upper() in allowed]
 
     if not vulns:
-        rprint("[green]No findings to remediate.[/green]")
-        return
+        if not quiet:
+            rprint("[green]No findings to remediate.[/green]")
+        return {"passed": 0, "failed": 0, "skipped": 0, "patches_dir": str(patches_base), "total_vulns": 0}
 
-    console.print(f"\n[bold]{len(vulns)} findings to remediate[/bold]")
+    if not quiet:
+        console.print(f"\n[bold]{len(vulns)} findings to remediate[/bold]")
+
+    remediator = None
     if use_local_claude:
-        console.print("[dim]Using local Claude (Agent SDK)[/dim]")
+        if not quiet:
+            console.print("[dim]Using local Claude (Agent SDK)[/dim]")
         from .agent import LocalClaudeRemediator
         remediator = LocalClaudeRemediator()
     else:
-        console.print("[dim]Using backend remediation engine[/dim]")
+        if not quiet:
+            console.print("[dim]Using backend remediation engine[/dim]")
 
     passed = failed = skipped = 0
 
@@ -628,7 +634,8 @@ def remediate_all(
         patch_file = patch_dir / "patch.json"
         reval_file = patch_dir / "revalidation.json"
 
-        console.print(f"\n[cyan]▸[/cyan] {vuln.get('severity')} {vuln.get('rule_id')}  {vuln.get('file_path')}:{vuln.get('start_line')}")
+        if not quiet:
+            console.print(f"\n[cyan]▸[/cyan] {vuln.get('severity')} {vuln.get('rule_id')}  {vuln.get('file_path')}:{vuln.get('start_line')}")
 
         try:
             if use_local_claude:
@@ -652,7 +659,8 @@ def remediate_all(
                         break
                     time.sleep(10)
                 else:
-                    rprint(f"  [yellow]Timed out waiting for remediation.[/yellow]")
+                    if not quiet:
+                        rprint(f"  [yellow]Timed out waiting for remediation.[/yellow]")
                     skipped += 1
                     continue
 
@@ -661,35 +669,83 @@ def remediate_all(
             patch["generated_by"] = "local_claude" if use_local_claude else "backend_engine"
             patch["created_at"] = datetime.utcnow().isoformat()
             patch_file.write_text(json.dumps(patch, indent=2))
-            console.print(f"  [green]✓[/green] Patch generated  confidence: {patch.get('confidence_score', 0):.2f}")
+            if not quiet:
+                console.print(f"  [green]✓[/green] Patch generated  confidence: {patch.get('confidence_score', 0):.2f}")
 
         except Exception as e:
-            rprint(f"  [red]✗[/red] Patch generation failed: {e}")
+            if not quiet:
+                rprint(f"  [red]✗[/red] Patch generation failed: {e}")
             skipped += 1
             continue
 
         if patch.get("is_false_positive"):
-            console.print(f"  [yellow]↩[/yellow] False positive — skipping revalidation")
+            if not quiet:
+                console.print(f"  [yellow]↩[/yellow] False positive — skipping revalidation")
             skipped += 1
             continue
 
-        console.print(f"  [dim]Revalidating...[/dim]")
+        if not quiet:
+            console.print(f"  [dim]Revalidating...[/dim]")
         try:
             reval = _run_revalidation(client, scan_id, vuln, patch)
             reval_file.write_text(json.dumps(reval, indent=2))
             if reval["status"] == "PASS":
-                console.print(f"  [green]✓[/green] Revalidation PASS")
+                if not quiet:
+                    console.print(f"  [green]✓[/green] Revalidation PASS")
                 passed += 1
             else:
-                console.print(f"  [yellow]⚠[/yellow] Revalidation {reval['status']}")
+                if not quiet:
+                    console.print(f"  [yellow]⚠[/yellow] Revalidation {reval['status']}")
                 failed += 1
         except Exception as e:
-            rprint(f"  [red]✗[/red] Revalidation error: {e}")
+            if not quiet:
+                rprint(f"  [red]✗[/red] Revalidation error: {e}")
             skipped += 1
 
-    console.print(f"\n[bold]Done.[/bold]  ✓ {passed} PASS  ⚠ {failed} FAIL  — {skipped} skipped")
-    console.print(f"Patches in: [cyan]{scan_dir / 'patches' / scan_id}[/cyan]")
-    console.print(f"Apply with: [cyan]secremediator apply {scan_id} --all[/cyan]\n")
+    if not quiet:
+        console.print(f"\n[bold]Done.[/bold]  ✓ {passed} PASS  ⚠ {failed} FAIL  — {skipped} skipped")
+        console.print(f"Patches in: [cyan]{patches_base}[/cyan]")
+        console.print(f"Apply with: [cyan]secremediator apply {scan_id} --all[/cyan]\n")
+
+    return {
+        "passed": passed,
+        "failed": failed,
+        "skipped": skipped,
+        "patches_dir": str(patches_base),
+        "total_vulns": len(vulns),
+    }
+
+
+@app.command("remediate-all")
+def remediate_all(
+    scan_id: str = typer.Argument(..., help="Scan ID to remediate"),
+    use_local_claude: bool = typer.Option(False, "--use-local-claude", help="Use local Claude via Claude Code (no API key needed) instead of backend engine"),
+    severity: Optional[str] = typer.Option(None, "--severity", help="Comma-separated severities to include, e.g. CRITICAL,HIGH"),
+    api_url: Optional[str] = typer.Option(None, "--api-url"),
+):
+    """Run full remediation loop: poll -> patch -> revalidate. Patches land in .security-scan/."""
+    client = SecRemediatorClient(api_url=api_url)
+
+    history = load_history()
+    entry = next((e for e in history if e["scan_id"] == scan_id), None)
+    if not entry:
+        rprint(f"[red]Scan {scan_id} not found in history.[/red]")
+        raise typer.Exit(1)
+
+    target = Path(entry["path"])
+
+    try:
+        _run_remediate_all_loop(
+            client=client,
+            scan_id=scan_id,
+            target=target,
+            severity=severity,
+            use_local_claude=use_local_claude,
+            quiet=False,
+        )
+    except RuntimeError as e:
+        rprint(f"[red]{e}[/red]")
+        raise typer.Exit(1)
 
 
 @app.command()
