@@ -328,8 +328,24 @@ class S3VectorStore(VectorStore):
         logger.warning(f"Deletion logic for {scan_id} is pending S3 Vectors 'DeleteByQuery' availability.")
 
 
+class NullVectorStore(VectorStore):
+    """No-op vector store used when lancedb is unavailable (e.g. macOS x86_64)."""
+
+    def search(self, query_text: str, limit: int = 1, filters=None):
+        return []
+
+    def store(self, rule_id: str, remediation_text: str, original_code: str, scan_id: str, scanner_type: str):
+        pass
+
+    def delete_scan(self, scan_id: str):
+        pass
+
+
 def get_vector_store() -> VectorStore:
-    # Use Agno Store for Local/Dev
     if settings.APP_ENV in ["local", "local_mock"]:
-        return AgnoVectorStore()
+        try:
+            return AgnoVectorStore()
+        except ImportError:
+            logger.warning("lancedb not available on this platform — vector search disabled. Core scanning and remediation are unaffected.")
+            return NullVectorStore()
     return S3VectorStore()

@@ -38,9 +38,7 @@ class MockProvider(LLMProvider):
         )
 
 def get_provider() -> LLMProvider:
-    """Factory to get the configured provider."""
-    if settings.ANTHROPIC_API_KEY:
-        return AnthropicProvider()
+    """Factory to get the configured provider. Always uses DeepSeek for server-side remediation."""
     if settings.DEEPSEEK_API_KEY:
         return DeepSeekProvider()
     if settings.APP_ENV == "local_mock":

@@ -1,5 +1,5 @@
 [project]
-name = "secremediator"
+name = "security-pipeline"
 version = "0.1.0"
 description = "Local security scan CLI and MCP server for the Security Remediation System"
 requires-python = ">=3.12"
@@ -12,12 +12,21 @@ dependencies = [
 ]
 
 [project.scripts]
-secremediator = "secremediator.cli:app"
-secremediator-mcp = "secremediator.mcp_server:main"
+security-pipeline = "security_pipeline.cli:app"
+security-pipeline-mcp = "security_pipeline.mcp_server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/secremediator"]
+packages = ["src/security_pipeline"]

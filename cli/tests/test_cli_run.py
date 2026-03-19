@@ -4,18 +4,18 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from typer.testing import CliRunner
-from secremediator.cli import app, _submit_scan_job
+from security_pipeline.cli import app, _submit_scan_job
 
 
 def test_submit_scan_job_archives_uploads_saves(tmp_path):
     """_submit_scan_job archives, uploads, saves history/session and returns (scan_id, scan_dir)."""
     fake_scan_id = "test-scan-001"
 
-    with patch("secremediator.cli.create_archive", return_value="/tmp/fake.tar.gz") as mock_archive, \
-         patch("secremediator.cli.SecRemediatorClient") as MockClient, \
-         patch("secremediator.cli.save_archive") as mock_save_archive, \
-         patch("secremediator.cli.save_to_history") as mock_save_history, \
-         patch("secremediator.cli.Path.unlink"):
+    with patch("security_pipeline.cli.create_archive", return_value="/tmp/fake.tar.gz") as mock_archive, \
+         patch("security_pipeline.cli.SecurityPipelineClient") as MockClient, \
+         patch("security_pipeline.cli.save_archive") as mock_save_archive, \
+         patch("security_pipeline.cli.save_to_history") as mock_save_history, \
+         patch("security_pipeline.cli.Path.unlink"):
 
         mock_client = MockClient.return_value
         mock_client.upload_scan.return_value = {"scan_id": fake_scan_id}
@@ -53,7 +53,7 @@ def test_submit_scan_job_archives_uploads_saves(tmp_path):
 
 def test_run_remediate_all_loop_returns_summary(tmp_path):
     """_run_remediate_all_loop polls, generates patches, revalidates, returns summary dict."""
-    from secremediator.cli import _run_remediate_all_loop
+    from security_pipeline.cli import _run_remediate_all_loop
 
     scan_data = {
         "status": "completed",
@@ -82,9 +82,9 @@ def test_run_remediate_all_loop_returns_summary(tmp_path):
     mock_client.get_scan.return_value = scan_data
     mock_client.request_remediation.return_value = {"status": "completed"}
 
-    with patch("secremediator.cli._poll_until_complete", return_value=scan_data), \
-         patch("secremediator.cli._run_revalidation", return_value=reval_data), \
-         patch("secremediator.cli.get_archive_path", return_value=None):
+    with patch("security_pipeline.cli._poll_until_complete", return_value=scan_data), \
+         patch("security_pipeline.cli._run_revalidation", return_value=reval_data), \
+         patch("security_pipeline.cli.get_archive_path", return_value=None):
 
         # Patch the remediation polling loop to return patch immediately
         mock_scan_with_rems = {
@@ -114,11 +114,11 @@ def test_run_remediate_all_loop_returns_summary(tmp_path):
 
 def test_run_remediate_all_loop_raises_on_failed_scan(tmp_path):
     """_run_remediate_all_loop raises RuntimeError if scan failed."""
-    from secremediator.cli import _run_remediate_all_loop
+    from security_pipeline.cli import _run_remediate_all_loop
 
     mock_client = MagicMock()
 
-    with patch("secremediator.cli._poll_until_complete", return_value={"status": "failed"}):
+    with patch("security_pipeline.cli._poll_until_complete", return_value={"status": "failed"}):
         with pytest.raises(RuntimeError, match="Scan failed"):
             _run_remediate_all_loop(
                 client=mock_client,
@@ -131,16 +131,16 @@ def test_run_remediate_all_loop_raises_on_failed_scan(tmp_path):
 def test_run_command_chains_scan_and_remediate(tmp_path):
     """run command calls _submit_scan_job then _run_remediate_all_loop."""
     from typer.testing import CliRunner
-    from secremediator.cli import app
+    from security_pipeline.cli import app
     runner = CliRunner()
 
     fake_scan_id = "run-scan-001"
     fake_scan_dir = tmp_path / ".security-scan"
     fake_result = {"passed": 2, "failed": 0, "skipped": 1, "patches_dir": str(tmp_path), "total_vulns": 3}
 
-    with patch("secremediator.cli._submit_scan_job", return_value=(fake_scan_id, fake_scan_dir)) as mock_submit, \
-         patch("secremediator.cli._run_remediate_all_loop", return_value=fake_result) as mock_loop, \
-         patch("secremediator.cli.SecRemediatorClient"):
+    with patch("security_pipeline.cli._submit_scan_job", return_value=(fake_scan_id, fake_scan_dir)) as mock_submit, \
+         patch("security_pipeline.cli._run_remediate_all_loop", return_value=fake_result) as mock_loop, \
+         patch("security_pipeline.cli.SecurityPipelineClient"):
         result = runner.invoke(app, ["run", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
@@ -155,14 +155,14 @@ def test_run_command_chains_scan_and_remediate(tmp_path):
 def test_run_command_passes_severity_filter(tmp_path):
     """run command passes --severity through to _run_remediate_all_loop."""
     from typer.testing import CliRunner
-    from secremediator.cli import app
+    from security_pipeline.cli import app
     runner = CliRunner()
 
     fake_result = {"passed": 1, "failed": 0, "skipped": 0, "patches_dir": str(tmp_path), "total_vulns": 1}
 
-    with patch("secremediator.cli._submit_scan_job", return_value=("scan-sev", tmp_path / ".security-scan")), \
-         patch("secremediator.cli._run_remediate_all_loop", return_value=fake_result) as mock_loop, \
-         patch("secremediator.cli.SecRemediatorClient"):
+    with patch("security_pipeline.cli._submit_scan_job", return_value=("scan-sev", tmp_path / ".security-scan")), \
+         patch("security_pipeline.cli._run_remediate_all_loop", return_value=fake_result) as mock_loop, \
+         patch("security_pipeline.cli.SecurityPipelineClient"):
         result = runner.invoke(app, ["run", str(tmp_path), "--severity", "CRITICAL,HIGH"])
 
     assert result.exit_code == 0, result.output
