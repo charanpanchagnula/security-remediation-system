@@ -36,7 +36,7 @@ module "compute" {
   source                = "./modules/compute"
   environment           = var.environment
   project_name          = var.project_name
-  ecr_image_uri         = "${module.storage.ecr_repository_url}:v-20251222-075427"
+  ecr_image_uri         = "${module.storage.ecr_repository_url}:v-20260201-132901"
   instance_role_arn     = module.iam.instance_role_arn
   access_role_arn       = module.iam.access_role_arn
   sqs_queue_url         = module.queue.sqs_queue_url

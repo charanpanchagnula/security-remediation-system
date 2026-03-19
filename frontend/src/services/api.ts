@@ -51,8 +51,11 @@ export interface Vulnerability {
 
 export interface CodeChange {
   file_path: string;
+  start_line?: number;
+  end_line?: number;
   original_code: string;
   new_code: string;
+  description?: string;
 }
 
 export interface Remediation {
@@ -62,6 +65,7 @@ export interface Remediation {
   explanation: string;
   code_changes: CodeChange[];
   security_implications: string[];
+  evaluation_concerns?: string[];
   is_false_positive?: boolean;
   confidence_score?: number;
   code_diff?: string; // Legacy support

@@ -1,0 +1,11 @@
+{
+  "name": "security-pipeline",
+  "version": "0.1.0",
+  "description": "Security scanning and AI-powered remediation for your codebase. Runs semgrep/checkov/trivy scans, generates patches, revalidates fixes, and warns before git push.",
+  "author": {
+    "name": "Security Remediation System"
+  },
+  "keywords": ["security", "scanning", "remediation", "semgrep", "checkov", "trivy"],
+  "skills": "./skills/",
+  "mcp": "./.mcp.json"
+}
