@@ -298,11 +298,25 @@ export default function ScanClient() {
                                                                 </a>
                                                             )}
                                                         </div>
+                                                        {change.description && (
+                                                            <p className="text-xs text-gray-400 italic mb-1">{change.description}</p>
+                                                        )}
                                                         <pre className="text-sm p-2 bg-gray-800 rounded border border-gray-700"><code>{change.new_code}</code></pre>
                                                     </div>
                                                 ))}
                                                 {remediation.code_diff && <pre className="text-sm"><code>{remediation.code_diff}</code></pre>}
                                             </div>
+
+                                            {remediation.evaluation_concerns && remediation.evaluation_concerns.length > 0 && (
+                                                <div className="mb-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-md">
+                                                    <h4 className="text-xs font-bold uppercase text-yellow-700 dark:text-yellow-400 mb-2">Self-Evaluation Concerns</h4>
+                                                    <ul className="list-disc pl-4 space-y-1">
+                                                        {remediation.evaluation_concerns.map((concern, idx) => (
+                                                            <li key={idx} className="text-xs text-yellow-800 dark:text-yellow-300">{concern}</li>
+                                                        ))}
+                                                    </ul>
+                                                </div>
+                                            )}
 
                                             <div className="mt-6 border-t border-gray-100 dark:border-gray-700 pt-6">
                                                 <h4 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wider mb-3">Detailed Explanation</h4>

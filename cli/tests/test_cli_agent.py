@@ -1,5 +1,5 @@
 """
-Tests for LocalClaudeRemediator in cli/src/secremediator/agent.py.
+Tests for LocalClaudeRemediator in cli/src/security-pipeline/agent.py.
 
 claude_agent_sdk.query is mocked — no Claude API calls are made.
 """
@@ -59,15 +59,15 @@ def _patch_query_and_result_message(result_text: str):
         yield fake_msg
 
     return (
-        patch("secremediator.agent.query", new=fake_query),
-        patch("secremediator.agent.ResultMessage", fake_msg_class),
+        patch("security_pipeline.agent.query", new=fake_query),
+        patch("security_pipeline.agent.ResultMessage", fake_msg_class),
     )
 
 
 def test_generate_patch_returns_dict_on_valid_json():
     q_patch, rm_patch = _patch_query_and_result_message(json.dumps(VALID_PATCH))
     with q_patch, rm_patch:
-        from secremediator.agent import LocalClaudeRemediator
+        from security_pipeline.agent import LocalClaudeRemediator
         r = LocalClaudeRemediator()
         result = r.generate_patch(VULN, SOURCE)
     assert isinstance(result, dict)
@@ -79,7 +79,7 @@ def test_generate_patch_strips_markdown_fences():
     fenced = "```json\n" + json.dumps(VALID_PATCH) + "\n```"
     q_patch, rm_patch = _patch_query_and_result_message(fenced)
     with q_patch, rm_patch:
-        from secremediator.agent import LocalClaudeRemediator
+        from security_pipeline.agent import LocalClaudeRemediator
         r = LocalClaudeRemediator()
         result = r.generate_patch(VULN, SOURCE)
     assert result["is_false_positive"] is False
@@ -89,7 +89,7 @@ def test_generate_patch_strips_generic_code_fence():
     fenced = "```\n" + json.dumps(VALID_PATCH) + "\n```"
     q_patch, rm_patch = _patch_query_and_result_message(fenced)
     with q_patch, rm_patch:
-        from secremediator.agent import LocalClaudeRemediator
+        from security_pipeline.agent import LocalClaudeRemediator
         r = LocalClaudeRemediator()
         result = r.generate_patch(VULN, SOURCE)
     assert "code_changes" in result
@@ -98,7 +98,7 @@ def test_generate_patch_strips_generic_code_fence():
 def test_generate_patch_raises_on_non_json():
     q_patch, rm_patch = _patch_query_and_result_message("This is not JSON at all.")
     with q_patch, rm_patch:
-        from secremediator.agent import LocalClaudeRemediator
+        from security_pipeline.agent import LocalClaudeRemediator
         r = LocalClaudeRemediator()
         with pytest.raises(ValueError, match="non-JSON output"):
             r.generate_patch(VULN, SOURCE)
@@ -109,7 +109,7 @@ def test_generate_patch_records_evaluation_concerns_and_lowers_confidence():
     bad_patch = {**VALID_PATCH, "evaluation_concerns": ["Fix may break legacy callers"], "confidence_score": 0.9}
     q_patch, rm_patch = _patch_query_and_result_message(json.dumps(bad_patch))
     with q_patch, rm_patch:
-        from secremediator.agent import LocalClaudeRemediator
+        from security_pipeline.agent import LocalClaudeRemediator
         r = LocalClaudeRemediator()
         result = r.generate_patch(VULN, SOURCE)
     assert result["evaluation_concerns"] == ["Fix may break legacy callers"]
@@ -121,9 +121,9 @@ def test_generate_patch_raises_when_no_result_returned():
         return
         yield  # makes it an async generator
 
-    with patch("secremediator.agent.query", new=empty_query), \
-         patch("secremediator.agent.ResultMessage", MagicMock()):
-        from secremediator.agent import LocalClaudeRemediator
+    with patch("security_pipeline.agent.query", new=empty_query), \
+         patch("security_pipeline.agent.ResultMessage", MagicMock()):
+        from security_pipeline.agent import LocalClaudeRemediator
         r = LocalClaudeRemediator()
         with pytest.raises(ValueError, match="no result"):
             r.generate_patch(VULN, SOURCE)
@@ -138,7 +138,7 @@ def test_generate_patch_false_positive_has_empty_code_changes():
     }
     q_patch, rm_patch = _patch_query_and_result_message(json.dumps(fp_patch))
     with q_patch, rm_patch:
-        from secremediator.agent import LocalClaudeRemediator
+        from security_pipeline.agent import LocalClaudeRemediator
         r = LocalClaudeRemediator()
         result = r.generate_patch(VULN, SOURCE)
     assert result["is_false_positive"] is True
@@ -157,9 +157,9 @@ def test_prompt_contains_vulnerability_fields():
         yield fake_msg
 
 
-    with patch("secremediator.agent.query", new=capturing_query), \
-         patch("secremediator.agent.ResultMessage", fake_rm):
-        from secremediator.agent import LocalClaudeRemediator
+    with patch("security_pipeline.agent.query", new=capturing_query), \
+         patch("security_pipeline.agent.ResultMessage", fake_rm):
+        from security_pipeline.agent import LocalClaudeRemediator
         r = LocalClaudeRemediator()
         r.generate_patch(VULN, SOURCE)
 
@@ -171,12 +171,12 @@ def test_prompt_contains_vulnerability_fields():
 
 
 def test_default_model_is_sonnet():
-    from secremediator.agent import LocalClaudeRemediator
+    from security_pipeline.agent import LocalClaudeRemediator
     r = LocalClaudeRemediator()
     assert r.model == "claude-sonnet-4-6"
 
 
 def test_custom_model_accepted():
-    from secremediator.agent import LocalClaudeRemediator
+    from security_pipeline.agent import LocalClaudeRemediator
     r = LocalClaudeRemediator(model="claude-opus-4-6")
     assert r.model == "claude-opus-4-6"

@@ -4,7 +4,7 @@ from typing import Optional
 from .config import get_api_url
 
 
-class SecRemediatorClient:
+class SecurityPipelineClient:
     def __init__(self, api_url: Optional[str] = None):
         self.api_url = api_url or get_api_url()
 

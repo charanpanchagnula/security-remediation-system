@@ -1,5 +1,5 @@
 {
-  "name": "secremediator",
+  "name": "security-pipeline",
   "version": "0.1.0",
   "description": "Security scanning and AI-powered remediation for your codebase. Runs semgrep/checkov/trivy scans, generates patches, revalidates fixes, and warns before git push.",
   "author": {
@@ -7,6 +7,5 @@
   },
   "keywords": ["security", "scanning", "remediation", "semgrep", "checkov", "trivy"],
   "skills": "./skills/",
-  "hooks": "./hooks/hooks.json",
   "mcp": "./.mcp.json"
 }

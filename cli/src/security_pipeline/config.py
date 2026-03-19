@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-CONFIG_DIR = Path.home() / ".secremediator"
+CONFIG_DIR = Path.home() / ".security-pipeline"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 HISTORY_FILE = CONFIG_DIR / "history.json"
 ARCHIVES_DIR = CONFIG_DIR / "archives"

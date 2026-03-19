@@ -8,7 +8,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 def run_tool(name, arguments):
     """Helper to call the MCP call_tool handler synchronously."""
-    from secremediator.mcp_server import call_tool
+    from security_pipeline.mcp_server import call_tool
     loop = asyncio.new_event_loop()
     try:
         return loop.run_until_complete(call_tool(name, arguments))
@@ -30,7 +30,7 @@ def test_sync_sessions_lists_sessions(tmp_path):
     }
     (sessions_dir / "scan-aaa.json").write_text(json.dumps(session_data))
 
-    with patch("secremediator.mcp_server.SecRemediatorClient") as MockClient:
+    with patch("security_pipeline.mcp_server.SecurityPipelineClient") as MockClient:
         mock_client = MockClient.return_value
         mock_client.get_scan.return_value = {
             "status": "completed",
@@ -67,7 +67,7 @@ def test_sync_sessions_handles_client_error(tmp_path):
     session_data = {"scan_id": "scan-err", "status": "queued"}
     (sessions_dir / "scan-err.json").write_text(json.dumps(session_data))
 
-    with patch("secremediator.mcp_server.SecRemediatorClient") as MockClient:
+    with patch("security_pipeline.mcp_server.SecurityPipelineClient") as MockClient:
         mock_client = MockClient.return_value
         mock_client.get_scan.side_effect = Exception("connection refused")
 
@@ -187,7 +187,7 @@ def test_apply_all_remediations_updates_session_on_apply(tmp_path):
     session_file.write_text(json.dumps(session_data))
 
     # Patch _apply_patch_changes to return a file name (simulate a file was changed)
-    with patch("secremediator.mcp_server._apply_patch_changes", return_value=["app/db.py"]):
+    with patch("security_pipeline.mcp_server._apply_patch_changes", return_value=["app/db.py"]):
         result = run_tool("apply_all_remediations", {"scan_id": scan_id, "repo_path": str(tmp_path)})
 
     data = json.loads(result[0].text)
@@ -202,8 +202,8 @@ def test_remediate_all_returns_summary(tmp_path):
     """remediate_all tool runs the remediation loop and returns summary."""
     mock_result = {"passed": 3, "failed": 1, "skipped": 0, "total_vulns": 4, "patches_dir": str(tmp_path)}
 
-    with patch("secremediator.mcp_server.SecRemediatorClient"), \
-         patch("secremediator.mcp_server._run_remediate_all_loop", return_value=mock_result) as mock_loop:
+    with patch("security_pipeline.mcp_server.SecurityPipelineClient"), \
+         patch("security_pipeline.mcp_server._run_remediate_all_loop", return_value=mock_result) as mock_loop:
         result = run_tool("remediate_all", {"scan_id": "scan-zzz", "repo_path": str(tmp_path)})
 
     data = json.loads(result[0].text)
@@ -218,9 +218,9 @@ def test_run_full_pipeline_returns_scan_id_and_summary(tmp_path):
     """run_full_pipeline submits scan then runs remediation loop, returns combined result."""
     mock_result = {"passed": 2, "failed": 0, "skipped": 1, "total_vulns": 3, "patches_dir": str(tmp_path)}
 
-    with patch("secremediator.mcp_server.SecRemediatorClient"), \
-         patch("secremediator.mcp_server._submit_scan_job", return_value=("pipeline-scan-001", tmp_path / ".security-scan")) as mock_submit, \
-         patch("secremediator.mcp_server._run_remediate_all_loop", return_value=mock_result) as mock_loop:
+    with patch("security_pipeline.mcp_server.SecurityPipelineClient"), \
+         patch("security_pipeline.mcp_server._submit_scan_job", return_value=("pipeline-scan-001", tmp_path / ".security-scan")) as mock_submit, \
+         patch("security_pipeline.mcp_server._run_remediate_all_loop", return_value=mock_result) as mock_loop:
         result = run_tool("run_full_pipeline", {
             "path": str(tmp_path),
             "project_name": "testproject",

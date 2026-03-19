@@ -1,9 +1,9 @@
 {
   "mcpServers": {
-    "secremediator": {
-      "command": "secremediator-mcp",
+    "security-pipeline": {
+      "command": "security-pipeline-mcp",
       "env": {
-        "SECREMEDIATOR_API_URL": "${SECREMEDIATOR_API_URL}"
+        "SECURITY_PIPELINE_API_URL": "${SECURITY_PIPELINE_API_URL:-http://localhost:8000}"
       }
     }
   }

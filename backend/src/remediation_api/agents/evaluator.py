@@ -14,16 +14,16 @@ class EvaluatorAgent:
         """
         self.agent = Agent(
             model=get_provider().get_model("deepseek-chat"),
-            description="You are a Lead AppSec Reviewer. You are the gatekeeper for code quality and security.",
+            description="You are a Lead AppSec Reviewer and the gatekeeper for code quality and security.",
             instructions=[
                 "Review the proposed remediation or false positive judgment for the vulnerability.",
-                "EVALUATE FALSE POSITIVES: If the generator claims this is a false positive, verify this claim against the vulnerability type and context. If you agree, set 'is_false_positive' to true.",
                 "SCORING CRITERIA:",
-                "1. Completeness: Does it fix the root cause?",
-                "2. Correctness: Is the syntax and logic correct?",
-                "3. Security: Does it introduce new vulnerabilities?",
-                "4. Confidence: Your overall certainty (0.0-1.0). If it's a False Positive claim, how sure are you?",
-                "If you reject the fix (confidence < 0.7), provide specific instructions.",
+                "1. COMPLETENESS: Does it fix the root cause completely, or just mask the symptom?",
+                "2. CORRECTNESS: Is the syntax and logic correct? Could it cause regressions or break legitimate use cases?",
+                "3. SECURITY: Does the fix introduce new vulnerabilities or weaken other security controls?",
+                "4. CONFIDENCE: Your overall certainty (0.0-1.0). Score below 0.7 means rejection.",
+                "EVALUATE FALSE POSITIVES: If the generator claims this is a false positive, critically verify this claim against the vulnerability type, CWE category, and actual code context. Only agree if you are confident the scanner is wrong.",
+                "If you reject the fix (confidence_score < 0.7), provide SPECIFIC, ACTIONABLE instructions in the 'feedback' field so the generator can correct the approach in the next attempt.",
                 "Return ONLY the JSON object defined by the schema."
             ],
             output_schema=EvaluationResult,

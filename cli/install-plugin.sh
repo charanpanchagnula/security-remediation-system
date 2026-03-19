@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Installs the secremediator MCP server into Claude Code's config.
+# Installs the security-pipeline MCP server into Claude Code's config.
 # Usage: ./install-plugin.sh [--api-url http://localhost:8000]
 
 set -euo pipefail
 
-API_URL="${SECREMEDIATOR_API_URL:-http://localhost:8000}"
+API_URL="${SECURITY_PIPELINE_API_URL:-http://localhost:8000}"
 CONFIG_FILE="${HOME}/.claude/claude_desktop_config.json"
 
 # Parse --api-url flag
@@ -15,10 +15,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Resolve secremediator-mcp command path
-MCP_CMD=$(which secremediator-mcp 2>/dev/null || echo "")
+# Resolve security-pipeline-mcp command path
+MCP_CMD=$(which security-pipeline-mcp 2>/dev/null || echo "")
 if [[ -z "$MCP_CMD" ]]; then
-  echo "ERROR: secremediator-mcp not found in PATH."
+  echo "ERROR: security-pipeline-mcp not found in PATH."
   echo "Install first: uv tool install . (from the cli/ directory)"
   exit 1
 fi
@@ -30,7 +30,7 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
   echo '{"mcpServers":{}}' > "$CONFIG_FILE"
 fi
 
-# Add or update secremediator entry using Python (avoids jq dependency)
+# Add or update security-pipeline entry using Python (avoids jq dependency)
 python3 - <<PYEOF
 import json, os, sys
 
@@ -41,12 +41,12 @@ api_url = "$API_URL"
 with open(config_path) as f:
     config = json.load(f)
 
-env = {"SECREMEDIATOR_API_URL": api_url}
+env = {"SECURITY_PIPELINE_API_URL": api_url}
 api_key = os.environ.get("ANTHROPIC_API_KEY")
 if api_key:
     env["ANTHROPIC_API_KEY"] = api_key
 
-config.setdefault("mcpServers", {})["secremediator"] = {
+config.setdefault("mcpServers", {})["security-pipeline"] = {
     "command": mcp_cmd,
     "env": env,
 }
@@ -54,7 +54,7 @@ config.setdefault("mcpServers", {})["secremediator"] = {
 with open(config_path, "w") as f:
     json.dump(config, f, indent=2)
 
-print(f"✓ secremediator MCP server registered in {config_path}")
+print(f"✓ security-pipeline MCP server registered in {config_path}")
 print(f"  API URL: {api_url}")
 print(f"  Command: {mcp_cmd}")
 print()

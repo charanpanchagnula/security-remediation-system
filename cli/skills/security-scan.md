@@ -1,51 +1,69 @@
 ---
 name: security-scan
-description: Run a full security scan on the current repo, generate AI patches for all findings, revalidate each fix, and apply passing patches.
+description: Scan a codebase for vulnerabilities, generate AI patches with local Claude, run a single batch revalidation, then show a dry-run diff of all passing patches.
 ---
 
 ## /security-scan
 
-Runs the complete security remediation loop using the secremediator MCP server.
+Runs the complete two-scan security remediation pipeline using the security-pipeline MCP server.
+**Patch generation uses local Claude by default** — no separate API key needed.
 
-### Steps
+### Pipeline
 
-1. **Start scan**
-   Call `run_security_scan` with:
-   - `path`: absolute path to the current workspace root
-   - `project_name`: name of the project (use the directory name)
-   - `scanners`: ["semgrep", "checkov", "trivy"]
+1. **Submit scan** — call `run_security_scan` with:
+   - `path`: absolute path to the workspace root
+   - `project_name`: the directory name is a good default
+   - `scanners`: `["semgrep", "checkov", "trivy"]`
 
-   Note the `scan_id` from the response.
+2. **Poll until complete** — call `poll_scan_status` every 30s.
+   Print a progress update each poll. Stop when `status` is `"completed"` or `"failed"`.
 
-2. **Poll until complete**
-   Call `poll_scan_status` every 30 seconds until `status` is `"completed"` or `"failed"`.
-   Print a status update each poll so the developer sees progress.
+3. **Show findings** — call `get_scan_results`. Display totals by severity.
 
-3. **Review findings**
-   Call `get_scan_results` with the `scan_id`.
-   Show the developer a summary: total findings by severity.
+4. **Generate all patches** — call `remediate_all` with `scan_id` and `repo_path`.
+   This uses local Claude to generate patches for every vulnerability.
+   Pass `use_backend_engine: true` only if you want the server-side AI engine instead.
 
-4. **Generate patches**
-   For each CRITICAL and HIGH finding:
-   a. Call `get_vulnerability_detail` to get full context and code snippet
-   b. Call `request_remediation` to trigger patch generation
-   c. Poll `poll_scan_status` until the remediation appears in results
+   Internally this:
+   - Skips lock files automatically (`uv.lock`, `poetry.lock`, etc.) — tell user to fix those via package manager
+   - Marks false positives as skipped (not patched, not revalidated)
+   - Generates patches for all remaining findings
+   - Applies all patches at once to a temp copy of the source
+   - Submits patched tar as **one** revalidation scan
+   - Analyses per-vulnerability results from that single scan
+   - Writes `REPORT-CRITICAL.md` and `REPORT-HIGH.md` to `.security-scan/patches/<scan_id>/`
 
-5. **Revalidation**
-   Revalidation runs automatically as part of `remediate-all` CLI command.
-   Each patch is tested by re-scanning with only the patched files replaced.
-   Status per patch: PASS | FAIL_STILL_VULNERABLE | FAIL_NEW_ISSUES | FAIL_BOTH
+5. **Show dry-run diff** — display every passing patch from `dry_run_patches` as a before/after diff.
+   This is the final preview before anything is written to disk.
+   Revalidation status per patch: `PASS | FAIL_STILL_VULNERABLE | FAIL_NEW_ISSUES | FAIL_BOTH`
 
-6. **Apply passing patches**
-   For each patch with revalidation status PASS:
-   Call `apply_remediation` with `scan_id`, `vuln_id`, and `repo_path`.
+6. **Report and offer to apply** — summarise:
+   - N vulnerabilities found, M patches passed revalidation
+   - `revalidation_scan_id` — the single batch revalidation scan
+   - Any FAIL patches that need manual review
+   - Report files at `.security-scan/patches/<scan_id>/REPORT-CRITICAL.md` and `REPORT-HIGH.md`
+   - Apply command: `security-pipeline apply <scan_id> --all`
 
-7. **Report to developer**
-   Summarise: N vulnerabilities found, M patches generated, K passed revalidation and applied.
-   List any FAIL patches that need manual review.
+### Output files
+
+```
+.security-scan/                        # gitignored — created at repo root
+├── sessions/
+│   └── <scan_id>.json                 # scan metadata + full vulnerability details
+└── patches/
+    └── <scan_id>/
+        ├── REPORT-CRITICAL.md         # auto-generated; only if CRITICAL findings exist
+        ├── REPORT-HIGH.md             # auto-generated; only if HIGH findings exist
+        └── <vuln_id>/
+            ├── patch.json             # generated code changes + confidence score
+            └── revalidation.json      # PASS/FAIL status from batch revalidation
+```
 
 ### Notes
-- Scanning runs inside the Docker backend container — `docker compose up -d` must be running
-- For local Claude remediation instead of backend engine: use CLI `secremediator remediate-all <scan_id> --use-local-claude`
-- Patches and revalidation results are stored in `.security-scan/` inside the scanned repo (gitignored)
-- To apply patches manually: `secremediator apply <scan_id> --all`
+
+- The backend must be running (`docker compose up -d` or `APP_ENV=local uvicorn ...`)
+- Pass `use_backend_engine: true` in `remediate_all` / `run_full_pipeline` to use server-side AI
+- All files in `.security-scan/` are gitignored automatically
+- To apply patches manually: `security-pipeline apply <scan_id> --all`
+- To preview without applying: `security-pipeline apply <scan_id> --all --dry-run`
+- `sync_sessions` updates session files with latest backend status and full vulnerability details
