@@ -7,6 +7,7 @@ class CodeChange(BaseModel):
     end_line: int = Field(..., description="Line number where change ends (1-indexed, inclusive)")
     original_code: str = Field(..., description="The code being replaced")
     new_code: str = Field(..., description="The secure replacement code")
+    description: str = Field("", description="Why this specific change fixes the issue")
 
 class RemediationResponse(BaseModel):
     vulnerability_id: str
@@ -15,6 +16,7 @@ class RemediationResponse(BaseModel):
     explanation: str = Field(..., description="Detailed technical explanation of WHY this is a vulnerability and HOW the fix works")
     code_changes: List[CodeChange]
     security_implications: List[str] = Field(..., description="Potential side effects or security notes")
+    evaluation_concerns: List[str] = Field(default_factory=list, description="Any concerns found during self-evaluation that could not be resolved")
     is_false_positive: bool = Field(False, description="Whether the AI believes this is a false positive")
     confidence_score: float = Field(0.0, description="Confidence in the remediation or false positive judgment")
 

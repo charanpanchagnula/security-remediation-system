@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "security-pipeline": {
+      "command": "security-pipeline-mcp",
+      "env": {
+        "SECURITY_PIPELINE_API_URL": "${SECURITY_PIPELINE_API_URL:-http://localhost:8000}"
+      }
+    }
+  }
+}

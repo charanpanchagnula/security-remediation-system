@@ -1,30 +1,13 @@
-# ==========================================
-# Stage 1: Frontend Builder
-# ==========================================
-FROM node:20-slim AS frontend-builder
-WORKDIR /app/frontend
-COPY frontend/package*.json ./
-RUN npm install --legacy-peer-deps
-COPY frontend/ ./
-# Add environment variables needed for build (e.g. Clerk keys if not public)
-# For static export, we often need these at build time.
-ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
-ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
-RUN npm run build
-
-# ==========================================
-# Stage 2: Final Image (Backend + Static Frontend)
-# ==========================================
+# Backend-only Dockerfile for local development and testing.
+# Skips the frontend build stage (no Clerk keys required).
 FROM python:3.12-slim
 
-# Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
     PATH="/root/.local/bin:$PATH" \
     PORT=8000
 
-# Install dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
@@ -42,29 +25,19 @@ RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
-# Install Checkov independently
+# Install Checkov
 RUN pip install --no-cache-dir checkov semgrep
 
-# Setup Work Directory
 WORKDIR /app/backend
 
-# Copy backend dependency files
 COPY backend/pyproject.toml backend/uv.lock ./
-# Install dependencies
 RUN uv sync --no-dev
 
-# Copy backend source
 COPY backend/src ./src
 COPY backend/rules ./rules
 
-# Copy built frontend from Stage 1
-COPY --from=frontend-builder /app/frontend/out ./src/remediation_api/static
-
-# Create necessary dirs
 RUN mkdir -p local_storage work_dir /data
 
-# Expose port
 EXPOSE 8000
 
-# Entrypoint
 CMD ["sh", "-c", "uv run uvicorn src.remediation_api.main:app --host 0.0.0.0 --port 8000"]
