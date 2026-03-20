@@ -79,21 +79,7 @@ Each benchmark case is a JSON file. Fields map directly to the vulnerability dic
 }
 ```
 
-`eval_harness.py` translates benchmark cases into the vulnerability dict format `generate_patch()` expects using this exact mapping:
-
-```python
-def case_to_vuln_dict(case: dict) -> dict:
-    return {
-        "scanner":   case["scanner"],
-        "rule_id":   case["expected_rule_id"],
-        "severity":  case["expected_severity"],
-        "message":   case["message"],
-        "file_path": case["file_path"],
-        "start_line": case["start_line"],
-        "end_line":   case["end_line"],
-        "metadata":  {"resource": case.get("resource", "unknown")},
-    }
-```
+`eval_harness.py` writes `vulnerable_code` to a real temp file, runs the scanner CLI on it, and builds the vulnerability dict from the **actual scanner output** — not the pre-filled case fields. The pre-filled fields are only used to validate the scanner fires (step 3) and for human-readable labels in results.tsv.
 
 ### Coverage by Scanner
 
@@ -176,14 +162,26 @@ This means `eval_harness.py` always reads the **current version of `SYSTEM_PROMP
 ### Per-case evaluation flow
 
 ```
-1. Validate: run scanner CLI on vulnerable_code → assert expected_rule_id fires (skip if not)
-2. Build prompt: load agent.py dynamically, call _build_prompt(vuln_dict, source_code)
-3. Call Claude API directly with SYSTEM_PROMPT and the built prompt
-4. Parse JSON patch from response
-5. Apply patch to temp directory
-6. Re-scan: run scanner CLI on patched code
-7. Score the case
+1. Write vulnerable_code to a real temp file on disk (e.g. /tmp/eval_case_001/app/db.py)
+2. Run scanner CLI on the temp file → get actual scanner output (JSON)
+3. Parse scanner output → find the finding that matches expected_rule_id
+   - If expected_rule_id not found: skip this case (broken case, not a failed experiment)
+4. Build vuln dict from the actual scanner output (rule_id, message, severity,
+   start_line, end_line from the real scan result — not the pre-filled case fields)
+5. Load agent.py dynamically, call _build_prompt(vuln_dict, source_code)
+6. Call Claude API directly with SYSTEM_PROMPT and the built prompt
+7. Parse JSON patch from response
+8. Apply patch to the temp file
+9. Re-scan: run scanner CLI on the patched temp file
+10. Score the case
+11. Clean up temp directory
 ```
+
+The pre-filled fields in the benchmark case JSON (`message`, `start_line`, `end_line`, `expected_rule_id`) are used only for:
+- **Step 3 validation** — confirming the scanner fires before trusting the case
+- **Case identification** — human-readable labels for results.tsv descriptions
+
+The vuln dict Claude receives always comes from actual scanner output, matching production behavior.
 
 ### Scoring formula
 
