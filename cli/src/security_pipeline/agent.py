@@ -174,6 +174,21 @@ class LocalClaudeRemediator:
         start_line = vuln.get('start_line', 0)
         end_line = vuln.get('end_line', 0)
 
+        # Derive scanner context from scanner name and file extension
+        scanner = vuln.get('scanner', '')
+        ext = file_path.rsplit('.', 1)[-1] if '.' in file_path else ''
+        scanner_context = {
+            'semgrep': 'SAST scanner detecting code-level vulnerabilities in application source.',
+            'checkov': 'IaC scanner detecting misconfigurations in Terraform/CloudFormation/Kubernetes.',
+            'trivy': 'SCA scanner detecting known CVEs in dependency manifests (requirements.txt, package-lock.json).',
+        }.get(scanner, f'Security scanner ({scanner})')
+        file_context = {
+            'tf': 'Terraform infrastructure-as-code',
+            'py': 'Python source code',
+            'txt': 'Python dependency manifest',
+            'json': 'JSON dependency manifest (package-lock)',
+        }.get(ext, f'{ext} file')
+
         # Annotate the flagged lines within the full file so the LLM has complete context
         lines = source_code.splitlines()
         annotated = []
@@ -184,7 +199,10 @@ class LocalClaudeRemediator:
                 annotated.append(f"{i:4d}     {line}")
         code_section = "\n".join(annotated)
 
-        return f"""Vulnerability report:
+        return f"""# Scanner context
+{scanner_context} File type: {file_context}.
+
+Vulnerability report:
 - Scanner: {vuln.get('scanner')}
 - Rule: {vuln.get('rule_id')}
 - Severity: {vuln.get('severity')}
