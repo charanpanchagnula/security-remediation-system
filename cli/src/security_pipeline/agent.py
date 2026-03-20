@@ -40,7 +40,7 @@ PATCH_SCHEMA = """{
 }"""
 
 
-SYSTEM_PROMPT = """You are a security engineer performing code remediation.
+SYSTEM_PROMPT = """You are a remediation engineer focused on producing minimal, safe code patches.
 
 Follow this 4-step process before producing output:
 
