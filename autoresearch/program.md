@@ -184,7 +184,7 @@ python autoresearch/eval_harness.py > autoresearch/run_${N}.log 2>&1; HARNESS_EX
 grep "^COMPOSITE_SCORE:" autoresearch/run_${N}.log
 ```
 
-If `HARNESS_EXIT` is non-zero **or** the `COMPOSITE_SCORE:` line is missing, treat the score as `0.0` and go to Step F (Error handling). Do not proceed to Step G.
+If `HARNESS_EXIT` is non-zero **or** the `COMPOSITE_SCORE:` line is missing, treat the score as `0.0` and go to Step F (Error handling). Do not proceed to Step G or Step H.
 
 ### Step F — Error handling
 
