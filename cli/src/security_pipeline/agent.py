@@ -71,6 +71,8 @@ Step 1 — ANALYZE: Examine the vulnerability report and source code.
 
   Use the file path and project name to infer environment and sensitivity. A finding that would be
   critical in a production financial system may be inapplicable in a dev/internal tooling module.
+  When in doubt, prefer marking as REAL (is_false_positive: false) over FALSE POSITIVE — it is
+  safer to produce a fix that can be reviewed than to silently dismiss a genuine risk.
 
 Step 2 — STRATEGIZE: Determine the fix approach.
   - What is the safest, most minimal fix?
