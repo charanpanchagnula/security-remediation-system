@@ -1,0 +1,13 @@
+{
+  "id": "command_injection_001",
+  "scanner": "semgrep",
+  "vuln_type": "command_injection",
+  "language": "python",
+  "file_path": "app.py",
+  "expected_rule_id": "python.lang.security.audit.subprocess-shell-true.subprocess-shell-true",
+  "expected_severity": "HIGH",
+  "message": "Subprocess call with shell=True is dangerous. User-controlled input can lead to command injection. Use shell=False and pass arguments as a list.",
+  "start_line": 11,
+  "end_line": 11,
+  "vulnerable_code": "    subprocess.run(f\"ls -la {user_dir}\", shell=True)"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "sql_injection_001",
+  "scanner": "semgrep",
+  "vuln_type": "sql_injection",
+  "language": "python",
+  "file_path": "app.py",
+  "expected_rule_id": "python.lang.security.audit.formatted-sql-query.formatted-sql-query",
+  "expected_severity": "HIGH",
+  "message": "User-controlled data in SQL query formatted string. Avoid format strings in SQL queries - use parameterized queries instead.",
+  "start_line": 5,
+  "end_line": 6,
+  "vulnerable_code": "    query = f\"SELECT * FROM users WHERE id = {user_id}\"\n    cursor.execute(query)"
+}

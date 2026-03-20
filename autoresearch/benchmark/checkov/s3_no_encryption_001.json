@@ -1,0 +1,13 @@
+{
+  "id": "s3_no_encryption_001",
+  "scanner": "checkov",
+  "vuln_type": "s3_no_encryption",
+  "language": "terraform",
+  "file_path": "main.tf",
+  "expected_rule_id": "CKV_AWS_19",
+  "expected_severity": "MEDIUM",
+  "message": "S3 bucket missing server-side encryption configuration. Enable encryption at rest using KMS or AES-256.",
+  "start_line": 2,
+  "end_line": 4,
+  "vulnerable_code": "resource \"aws_s3_bucket\" \"example\" {\n  bucket = \"my-unencrypted-bucket\"\n  # missing server_side_encryption_configuration\n}"
+}

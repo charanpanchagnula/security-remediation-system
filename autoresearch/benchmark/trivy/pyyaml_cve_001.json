@@ -1,0 +1,13 @@
+{
+  "id": "pyyaml_cve_001",
+  "scanner": "trivy",
+  "vuln_type": "pyyaml_cve",
+  "language": "requirements.txt",
+  "file_path": "requirements.txt",
+  "expected_rule_id": "CVE-2020-14343",
+  "expected_severity": "HIGH",
+  "message": "PyYAML version 5.3.1 contains CVE-2020-14343. Arbitrary code execution via yaml.load(). Use yaml.safe_load() or upgrade to 5.4+.",
+  "start_line": 1,
+  "end_line": 1,
+  "vulnerable_code": "PyYAML==5.3.1"
+}

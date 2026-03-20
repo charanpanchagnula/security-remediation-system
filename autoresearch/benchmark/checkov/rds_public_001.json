@@ -1,0 +1,13 @@
+{
+  "id": "rds_public_001",
+  "scanner": "checkov",
+  "vuln_type": "rds_public",
+  "language": "terraform",
+  "file_path": "main.tf",
+  "expected_rule_id": "CKV_AWS_17",
+  "expected_severity": "HIGH",
+  "message": "RDS database instance is publicly accessible. Disable public accessibility and use VPC for secure access.",
+  "start_line": 2,
+  "end_line": 8,
+  "vulnerable_code": "resource \"aws_db_instance\" \"example\" {\n  identifier     = \"mydb\"\n  engine         = \"mysql\"\n  instance_class = \"db.t2.micro\"\n  allocated_storage = 20\n  publicly_accessible = true\n}"
+}

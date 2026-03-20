@@ -1,0 +1,13 @@
+{
+  "id": "path_traversal_001",
+  "scanner": "semgrep",
+  "vuln_type": "path_traversal",
+  "language": "python",
+  "file_path": "app.py",
+  "expected_rule_id": "python.lang.security.audit.path-traversal.path-traversal-open",
+  "expected_severity": "HIGH",
+  "message": "Potential path traversal vulnerability when joining user-controlled path with base directory. Validate user input before using in file operations.",
+  "start_line": 8,
+  "end_line": 8,
+  "vulnerable_code": "    file = open(os.path.join('/uploads', filename), 'r')"
+}

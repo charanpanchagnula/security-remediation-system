@@ -1,0 +1,13 @@
+{
+  "id": "requests_cve_001",
+  "scanner": "trivy",
+  "vuln_type": "requests_cve",
+  "language": "requirements.txt",
+  "file_path": "requirements.txt",
+  "expected_rule_id": "CVE-2023-32681",
+  "expected_severity": "MEDIUM",
+  "message": "requests version 2.29.0 contains CVE-2023-32681. Credential leak in URL authentication parameters. Upgrade to 2.31.0 or later.",
+  "start_line": 1,
+  "end_line": 1,
+  "vulnerable_code": "requests==2.29.0"
+}

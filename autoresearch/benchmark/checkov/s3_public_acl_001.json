@@ -1,0 +1,13 @@
+{
+  "id": "s3_public_acl_001",
+  "scanner": "checkov",
+  "vuln_type": "s3_public_acl",
+  "language": "terraform",
+  "file_path": "main.tf",
+  "expected_rule_id": "CKV_AWS_20",
+  "expected_severity": "HIGH",
+  "message": "S3 bucket with public read ACL. Change ACL to private or use bucket policies for controlled access.",
+  "start_line": 2,
+  "end_line": 4,
+  "vulnerable_code": "resource \"aws_s3_bucket\" \"example\" {\n  bucket = \"my-public-bucket\"\n  acl    = \"public-read\"\n}"
+}

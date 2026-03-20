@@ -1,0 +1,13 @@
+{
+  "id": "xss_001",
+  "scanner": "semgrep",
+  "vuln_type": "xss",
+  "language": "python",
+  "file_path": "app.py",
+  "expected_rule_id": "python.flask.security.xss.reflected-xss-all-config.reflected-xss-all-config",
+  "expected_severity": "HIGH",
+  "message": "Potential XSS vulnerability. User-controlled data reflected in HTML response without proper escaping. Use Flask's escape() or Jinja2 auto-escaping.",
+  "start_line": 14,
+  "end_line": 14,
+  "vulnerable_code": "    return make_response(f'<h1>Hello {name}</h1>')"
+}
