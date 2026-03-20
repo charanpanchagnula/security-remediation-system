@@ -124,6 +124,7 @@ class LocalClaudeRemediator:
                 model=self.model,
                 allowed_tools=[],
                 system_prompt=SYSTEM_PROMPT,
+                max_turns=3,
             ),
         ):
             if isinstance(message, ResultMessage):
