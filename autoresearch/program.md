@@ -31,7 +31,7 @@ cli/src/security_pipeline/agent.py
 cli/skills/security-scan.md
 ```
 
-Understand the structure of `SYSTEM_PROMPT`, `_build_prompt`, and `ClaudeAgentOptions` (model, temperature if present, max_tokens if present).
+Understand the structure of `SYSTEM_PROMPT`, `_build_prompt`, and `ClaudeAgentOptions` (model, allowed_tools, system_prompt, and optionally effort, max_turns, max_thinking_tokens, fallback_model).
 
 ### 1.2 Create the research branch
 
@@ -121,12 +121,13 @@ Adjust the criteria for marking a finding as `is_false_positive: true`. Try:
 **Target**: `ClaudeAgentOptions` constructor call in `_generate` in `cli/src/security_pipeline/agent.py`
 
 Modify model-level parameters. Examples:
-- If `temperature` is not currently set, add `temperature=0.2` to `ClaudeAgentOptions`.
-- If `temperature` is set, try `0.0`, `0.3`, or `0.5`.
-- If `max_tokens` is not set, add `max_tokens=2048` or `max_tokens=4096`.
-- Try a different model string such as `claude-opus-4-5` (only if the SDK supports it).
+- Set `effort='low'` for faster, less thorough reasoning; `effort='high'` or `effort='max'` for deeper analysis.
+- Add `max_turns=3` to limit the number of agent turns (useful to reduce latency and cost).
+- Add `max_thinking_tokens=5000` to allow extended internal reasoning before producing output.
+- Set `fallback_model='claude-haiku-4-5'` to specify a cheaper fallback if the primary model is unavailable.
+- Try a different `model` string such as `claude-opus-4-5`.
 
-Note: `ClaudeAgentOptions` accepts `model`, `allowed_tools`, `system_prompt`, and optionally `temperature` and `max_tokens`. Only add parameters the SDK accepts — check the import signature if uncertain.
+Note: `ClaudeAgentOptions` accepts `model`, `allowed_tools`, `system_prompt`, `effort`, `max_turns`, `max_thinking_tokens`, `fallback_model`, and other SDK-documented parameters. Do NOT use `temperature` or `max_tokens` — those are not valid parameters for this SDK.
 
 ---
 
@@ -172,31 +173,33 @@ Example: `autoresearch: run 3 axis C — inject scanner type context into prompt
 ### Step D — Run the harness
 
 ```bash
-python autoresearch/eval_harness.py > autoresearch/run.log 2>&1
+python autoresearch/eval_harness.py > autoresearch/run_${N}.log 2>&1; HARNESS_EXIT=$?
 ```
+
+(Where `N` is the current run number, e.g. `run_1.log`, `run_2.log`, etc. This preserves a per-run log history.)
 
 ### Step E — Extract the score
 
 ```bash
-grep "^COMPOSITE_SCORE:" autoresearch/run.log
+grep "^COMPOSITE_SCORE:" autoresearch/run_${N}.log
 ```
 
-If the line is missing (harness crashed), treat the score as `0.0` and go to Step F (Error handling) before continuing to Step G.
+If `HARNESS_EXIT` is non-zero **or** the `COMPOSITE_SCORE:` line is missing, treat the score as `0.0` and go to Step F (Error handling). Do not proceed to Step G.
 
 ### Step F — Error handling
 
-If the harness produced no COMPOSITE_SCORE line:
+If `HARNESS_EXIT` is non-zero or the harness produced no COMPOSITE_SCORE line:
 1. Log the run to `results.tsv` with `composite_score=0.0` and `status=error`.
 2. Run:
    ```bash
    git reset --hard HEAD~1
    ```
 3. If `git reset` fails, STOP immediately and report: "FATAL: git reset failed, manual intervention required."
-4. Continue to the next iteration.
+4. Do not execute Step G or Step H for this iteration — return directly to Step A for the next run.
 
 ### Step G — Keep or revert
 
-Let `PREV` be the composite score from the immediately preceding kept run (or the baseline for run 1).
+Let `PREV` be the `composite_score` value from the most recent row in `results.tsv` where `status=kept` (for run 1, this will be the baseline row with `run=0`). Derive it from `results.tsv` each time so that after consecutive reverts the correct reference score is always used.
 
 - If `new_score >= PREV`: **keep** the commit. Log `status=kept`.
 - If `new_score < PREV`: **revert** the commit:
