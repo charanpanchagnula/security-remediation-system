@@ -70,15 +70,18 @@ def count_changed_lines(original: str, patched: str) -> int:
     """
     Count the number of lines that changed between original and patched code.
 
-    Uses difflib.SequenceMatcher to identify differences. Counts all lines that
-    are NOT part of equal opcodes (i.e., lines that were added, deleted, or modified).
+    Uses difflib.SequenceMatcher to identify differences. For each non-equal region
+    (replace, delete, insert), counts both the lines removed from original AND the
+    lines added in patched. This means replace operations are double-counted by design:
+    a replace of 2 lines with 1 line counts as 3 (2 removed + 1 added).
 
     Args:
         original: The original code as a string.
         patched: The patched code as a string.
 
     Returns:
-        The number of lines that are not equal between original and patched.
+        The sum of lines removed from original PLUS lines added in patched,
+        across all non-equal regions.
     """
     # Split into lines
     original_lines = original.splitlines()

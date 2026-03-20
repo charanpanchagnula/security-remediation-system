@@ -185,11 +185,11 @@ class TestCountChangedLines:
         original = "line 1\nline 2\nline 3\nline 4"
         patched = "line 1\nchanged\nline 4"
         # Equal: line 1, line 4
-        # Changed: line 2 and line 3 removed, changed added (1 delete, 1 add, 1 delete = 3)
-        # Actually: line 2->changed (1 not equal), line 3 (1 not equal), line 4 equal
-        # So we should count how many non-equal matches
+        # Non-equal: lines 2-3 (original) replaced by changed (patched)
+        # Count: (i2-i1) + (j2-j1) = (3-1) + (2-1) = 2 + 1 = 3
+        # (2 original lines deleted + 1 patched line added)
         result = count_changed_lines(original, patched)
-        assert result > 0  # Some lines changed
+        assert result == 3
 
     def test_count_changed_lines_trailing_newlines(self):
         """Test with trailing newlines."""
