@@ -1,5 +1,6 @@
 """Unit tests for eval_harness.py — all scanner/remediator calls are mocked."""
 
+import io
 import json
 import sys
 from pathlib import Path
@@ -15,6 +16,7 @@ from eval_harness import (
     find_matching_vuln,
     load_benchmark_cases,
     run_case,
+    run_full_harness,
 )
 
 
@@ -119,7 +121,7 @@ def test_run_case_skip_when_prescan_empty():
     assert result["id"] == "sql_001"
     assert result["status"] == "skip"
     assert result["score"] is None
-    remediator.remediate.assert_not_called()
+    remediator.generate_patch.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +160,7 @@ def test_run_case_ok():
     scanner_funcs = {"semgrep": mock_scanner}
 
     mock_remediator = MagicMock()
-    mock_remediator.remediate.return_value = {
+    mock_remediator.generate_patch.return_value = {
         "is_false_positive": False,
         "code_changes": [
             {
@@ -203,7 +205,7 @@ def test_run_case_false_positive():
     scanner_funcs = {"semgrep": mock_scanner}
 
     mock_remediator = MagicMock()
-    mock_remediator.remediate.return_value = {
+    mock_remediator.generate_patch.return_value = {
         "is_false_positive": True,
         "code_changes": [],
     }
@@ -239,7 +241,7 @@ def test_run_case_error_on_remediator_exception():
     scanner_funcs = {"semgrep": mock_scanner}
 
     mock_remediator = MagicMock()
-    mock_remediator.remediate.side_effect = RuntimeError("AI unavailable")
+    mock_remediator.generate_patch.side_effect = RuntimeError("AI unavailable")
 
     result = run_case(case, mock_remediator, scanner_funcs)
 
@@ -273,7 +275,7 @@ def test_run_case_patch_error():
 
     mock_remediator = MagicMock()
     # Return a change that points to out-of-range lines so apply_patch raises.
-    mock_remediator.remediate.return_value = {
+    mock_remediator.generate_patch.return_value = {
         "is_false_positive": False,
         "code_changes": [
             {
@@ -289,3 +291,68 @@ def test_run_case_patch_error():
     assert result["id"] == "pe_001"
     assert result["status"] == "patch_error"
     assert result["score"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# run_full_harness — composite score printed and returned
+# ---------------------------------------------------------------------------
+
+
+def test_run_full_harness_prints_composite_score(tmp_path, capsys):
+    """run_full_harness prints 'COMPOSITE_SCORE: <float>' and returns a float."""
+    # Create one mock benchmark case under semgrep/
+    semgrep_dir = tmp_path / "semgrep"
+    semgrep_dir.mkdir()
+    case = {
+        "id": "full_001",
+        "scanner": "semgrep",
+        "expected_rule_id": "python.lang.test_rule",
+        "vulnerable_code": "x = 1\n",
+        "file_path": "app.py",
+        "start_line": 1,
+        "end_line": 1,
+    }
+    (semgrep_dir / "full_001.json").write_text(json.dumps(case))
+
+    # Mock scanner that finds the vuln on pre-scan and nothing on post-scan.
+    pre_vuln = {
+        "rule_id": "python.lang.test_rule",
+        "severity": "HIGH",
+        "start_line": 1,
+        "end_line": 1,
+        "file_path": "app.py",
+    }
+    mock_scanner = MagicMock(side_effect=[
+        [pre_vuln],  # pre-scan
+        [],           # post-scan
+    ])
+    scanner_funcs = {"semgrep": mock_scanner}
+
+    # Mock remediator that returns a clean patch.
+    mock_remediator = MagicMock()
+    mock_remediator.generate_patch.return_value = {
+        "is_false_positive": False,
+        "code_changes": [
+            {
+                "start_line": 1,
+                "end_line": 1,
+                "new_code": "x = 2",
+            }
+        ],
+    }
+
+    with patch("eval_harness.run_semgrep", mock_scanner), \
+         patch("eval_harness.run_checkov", MagicMock(return_value=[])), \
+         patch("eval_harness.run_trivy", MagicMock(return_value=[])):
+        score = run_full_harness(
+            benchmark_dir=tmp_path,
+            remediator=mock_remediator,
+        )
+
+    # Verify return type.
+    assert isinstance(score, float)
+
+    # Verify final stdout line starts with COMPOSITE_SCORE:
+    captured = capsys.readouterr()
+    lines = [l for l in captured.out.splitlines() if l.strip()]
+    assert lines[-1].startswith("COMPOSITE_SCORE:")

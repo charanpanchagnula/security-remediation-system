@@ -78,7 +78,7 @@ def run_case(
     case:
         Benchmark case dict (loaded from JSON).
     remediator:
-        Object with a ``remediate(vuln_dict) -> patch_dict`` method.
+        Object with a ``generate_patch(vuln_dict, source_code) -> patch_dict`` method.
     scanner_funcs:
         Mapping from scanner name to callable, e.g.
         ``{"semgrep": run_semgrep, "checkov": run_checkov, "trivy": run_trivy}``.
@@ -112,8 +112,9 @@ def run_case(
     # Remediate
     # ------------------------------------------------------------------
     try:
-        patch = remediator.remediate(matched_vuln)
-    except Exception:
+        patch = remediator.generate_patch(matched_vuln, vulnerable_code)
+    except Exception as exc:
+        print(f"[warn] [{case_id}] remediator error: {exc}")
         return {"id": case_id, "status": "error", "score": 0.0}
 
     # Handle false positives reported by the remediator.
@@ -126,9 +127,10 @@ def run_case(
     code_changes = patch.get("code_changes", [])
     patched_code = vulnerable_code
     try:
-        for change in code_changes:
+        for change in sorted(code_changes, key=lambda c: c.get("start_line", 0), reverse=True):
             patched_code = apply_patch(patched_code, change)
     except (ValueError, KeyError) as exc:
+        print(f"[warn] [{case_id}] patch apply error: {exc}")
         return {"id": case_id, "status": "patch_error", "score": 0.0}
 
     # ------------------------------------------------------------------
@@ -191,7 +193,7 @@ def run_full_harness(
         result = run_case(case, remediator, scanner_funcs)
         score_display = f"{result['score']:.4f}" if result["score"] is not None else "None"
         print(f"[{result['id']}] status={result['status']} score={score_display}")
-        if result["status"] not in ("skip",) and result["score"] is not None:
+        if result["status"] in ("ok", "false_positive"):
             scores.append(result["score"])
 
     composite = sum(scores) / len(scores) if scores else 0.0
