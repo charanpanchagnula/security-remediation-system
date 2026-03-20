@@ -1,6 +1,5 @@
 """Unit tests for eval_harness.py — all scanner/remediator calls are mocked."""
 
-import io
 import json
 import sys
 from pathlib import Path
@@ -218,7 +217,7 @@ def test_run_case_false_positive():
 
 
 def test_run_case_error_on_remediator_exception():
-    """When remediator.remediate raises, status=error, score=0.0."""
+    """When remediator.generate_patch raises, status=error, score=0.0."""
     case = {
         "id": "err_001",
         "scanner": "semgrep",
