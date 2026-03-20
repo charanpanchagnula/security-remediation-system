@@ -83,7 +83,8 @@ Step 4 — EVALUATE: Review your own patch.
   - Could it introduce regressions?
   - If you find concerns you cannot resolve, list them in evaluation_concerns.
 
-Respond with ONLY a JSON object matching the schema provided — no markdown fences, no explanation.
+Before the JSON, write one sentence stating the root cause of the vulnerability.
+Then respond with ONLY a JSON object matching the schema provided — no markdown fences, no explanation beyond that one sentence.
 If the finding is a false positive, set is_false_positive to true and code_changes to [].
 """
 
