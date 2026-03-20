@@ -8,6 +8,6 @@
   "expected_severity": "MEDIUM",
   "message": "S3 bucket missing server-side encryption configuration. Enable encryption at rest using KMS or AES-256.",
   "start_line": 2,
-  "end_line": 4,
+  "end_line": 5,
   "vulnerable_code": "resource \"aws_s3_bucket\" \"example\" {\n  bucket = \"my-unencrypted-bucket\"\n  # missing server_side_encryption_configuration\n}"
 }

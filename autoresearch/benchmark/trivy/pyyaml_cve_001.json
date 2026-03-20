@@ -2,7 +2,7 @@
   "id": "pyyaml_cve_001",
   "scanner": "trivy",
   "vuln_type": "pyyaml_cve",
-  "language": "requirements.txt",
+  "language": "python",
   "file_path": "requirements.txt",
   "expected_rule_id": "CVE-2020-14343",
   "expected_severity": "HIGH",

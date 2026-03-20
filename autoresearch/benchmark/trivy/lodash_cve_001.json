@@ -2,11 +2,11 @@
   "id": "lodash_cve_001",
   "scanner": "trivy",
   "vuln_type": "lodash_cve",
-  "language": "package-lock.json",
+  "language": "javascript",
   "file_path": "package-lock.json",
   "expected_rule_id": "CVE-2021-23337",
   "expected_severity": "HIGH",
-  "message": "lodash version 4.17.20 contains CVE-2021-23337. Prototype pollution vulnerability. Upgrade to 4.17.21 or later.",
+  "message": "Command injection vulnerability via template() function. Upgrade to 4.17.21 or later.",
   "start_line": 1,
   "end_line": 1,
   "vulnerable_code": "\"lodash\": \"4.17.20\""

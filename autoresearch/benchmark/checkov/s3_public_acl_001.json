@@ -8,6 +8,6 @@
   "expected_severity": "HIGH",
   "message": "S3 bucket with public read ACL. Change ACL to private or use bucket policies for controlled access.",
   "start_line": 2,
-  "end_line": 4,
+  "end_line": 5,
   "vulnerable_code": "resource \"aws_s3_bucket\" \"example\" {\n  bucket = \"my-public-bucket\"\n  acl    = \"public-read\"\n}"
 }

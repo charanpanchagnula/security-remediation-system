@@ -2,7 +2,7 @@
   "id": "requests_cve_001",
   "scanner": "trivy",
   "vuln_type": "requests_cve",
-  "language": "requirements.txt",
+  "language": "python",
   "file_path": "requirements.txt",
   "expected_rule_id": "CVE-2023-32681",
   "expected_severity": "MEDIUM",

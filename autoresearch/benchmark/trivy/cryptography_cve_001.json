@@ -2,11 +2,11 @@
   "id": "cryptography_cve_001",
   "scanner": "trivy",
   "vuln_type": "cryptography_cve",
-  "language": "requirements.txt",
+  "language": "python",
   "file_path": "requirements.txt",
   "expected_rule_id": "CVE-2023-49083",
   "expected_severity": "MEDIUM",
-  "message": "cryptography version 41.0.4 contains CVE-2023-49083. NULL pointer dereference in X.509 certificate parsing. Upgrade to 41.0.5 or later.",
+  "message": "NULL pointer dereference in PKCS12 parsing. Upgrade to 41.0.6 or later.",
   "start_line": 1,
   "end_line": 1,
   "vulnerable_code": "cryptography==41.0.4"

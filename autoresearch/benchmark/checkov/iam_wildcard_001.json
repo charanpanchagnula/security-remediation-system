@@ -4,10 +4,10 @@
   "vuln_type": "iam_wildcard",
   "language": "terraform",
   "file_path": "main.tf",
-  "expected_rule_id": "CKV_AWS_40",
+  "expected_rule_id": "CKV_AWS_1",
   "expected_severity": "HIGH",
   "message": "IAM policy allows all actions on all resources (*). Apply principle of least privilege by restricting actions and resources.",
   "start_line": 2,
-  "end_line": 10,
-  "vulnerable_code": "resource \"aws_iam_policy\" \"example\" {\n  name = \"admin_policy\"\n  policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Effect   = \"Allow\"\n      Action   = \"*\"\n      Resource = \"*\"\n    }]\n  })\n}"
+  "end_line": 13,
+  "vulnerable_code": "data \"aws_iam_policy_document\" \"admin_policy\" {\n  statement {\n    effect    = \"Allow\"\n    actions   = [\"*\"]\n    resources = [\"*\"]\n  }\n}\n\nresource \"aws_iam_policy\" \"admin\" {\n  name   = \"admin-policy\"\n  policy = data.aws_iam_policy_document.admin_policy.json\n}"
 }
