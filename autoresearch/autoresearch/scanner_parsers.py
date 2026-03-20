@@ -161,9 +161,12 @@ def run_semgrep(code: str, file_path: str = "code.py") -> list[dict[str, Any]]:
         tool not found.
     """
     suffix = Path(file_path).suffix or ".py"
-    with tempfile.NamedTemporaryFile(suffix=suffix, mode="w", delete=False) as tmp:
-        tmp.write(code)
-        tmp_path = tmp.name
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, mode="w", delete=False) as tmp:
+            tmp.write(code)
+            tmp_path = tmp.name
+    except OSError:
+        return []
     try:
         proc = subprocess.run(
             ["semgrep", "--config", "auto", tmp_path, "--json", "--quiet"],
@@ -194,9 +197,12 @@ def run_checkov(code: str, file_path: str = "main.tf") -> list[dict[str, Any]]:
         tool not found.
     """
     suffix = Path(file_path).suffix or ".tf"
-    with tempfile.NamedTemporaryFile(suffix=suffix, mode="w", delete=False) as tmp:
-        tmp.write(code)
-        tmp_path = tmp.name
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, mode="w", delete=False) as tmp:
+            tmp.write(code)
+            tmp_path = tmp.name
+    except OSError:
+        return []
     try:
         proc = subprocess.run(
             ["checkov", "-f", tmp_path, "--output", "json", "--quiet"],
@@ -228,18 +234,24 @@ def run_trivy(code: str, file_path: str = "requirements.txt") -> list[dict[str, 
         List of vulnerability dicts, or ``[]`` on timeout / JSON errors /
         tool not found.
     """
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        target_file = Path(tmp_dir) / Path(file_path).name
-        target_file.write_text(code)
-        try:
-            proc = subprocess.run(
-                ["trivy", "fs", "--format", "json", "--quiet", tmp_dir],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            data = json.loads(proc.stdout)
-            # Trivy reports Target as the filename relative to the scanned dir.
-            return parse_trivy_output(data, target_file.name)
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
-            return []
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target_file = Path(tmp_dir) / Path(file_path).name
+            target_file.write_text(code)
+            try:
+                proc = subprocess.run(
+                    ["trivy", "fs", "--format", "json", "--quiet", tmp_dir],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                data = json.loads(proc.stdout)
+                # Trivy reports Target as the basename; remap to original file_path.
+                results = parse_trivy_output(data, target_file.name)
+                for r in results:
+                    r["file_path"] = file_path
+                return results
+            except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
+                return []
+    except OSError:
+        return []
