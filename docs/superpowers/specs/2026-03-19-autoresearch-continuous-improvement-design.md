@@ -128,36 +128,17 @@ Scanners run as **local CLIs** for experiment speed — no Docker/backend requir
 - `checkov` — `pip install checkov`
 - `trivy` — `brew install trivy`
 
-### API invocation — standalone subprocess compatibility
+### API invocation — uses LocalClaudeRemediator directly
 
-`eval_harness.py` runs as a plain `python eval_harness.py` subprocess. It does **not** use `LocalClaudeRemediator` (which requires the Claude Agent SDK and Claude Code as host process). Instead, it calls the Anthropic API directly using the `anthropic` Python package and `ANTHROPIC_API_KEY`:
+`eval_harness.py` imports and uses `LocalClaudeRemediator` from `agent.py` directly — the same class used in production. The `claude_agent_sdk` it relies on works by calling the `claude` CLI, which is installed on the machine and authenticated. This means `eval_harness.py` runs fine as a plain `python eval_harness.py` subprocess — no separate API key required, no Claude Code host process required.
 
 ```python
-import anthropic
-import importlib.util, sys
-
-def _load_agent_module():
-    """Dynamically imports the current agent.py to read SYSTEM_PROMPT and _build_prompt."""
-    spec = importlib.util.spec_from_file_location(
-        "agent", "../cli/src/security_pipeline/agent.py"
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-def _call_claude(system_prompt: str, user_prompt: str, temperature: float = 0.2) -> str:
-    client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
-    msg = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=4096,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_prompt}],
-        temperature=temperature,
-    )
-    return msg.content[0].text
+import sys
+sys.path.insert(0, "../cli/src")
+from security_pipeline.agent import LocalClaudeRemediator
 ```
 
-This means `eval_harness.py` always reads the **current version of `SYSTEM_PROMPT` and `_build_prompt()`** from `agent.py` at runtime, so every experiment correctly reflects whatever the agent committed in step 3.
+This means `eval_harness.py` always uses the **current version of `SYSTEM_PROMPT` and `_build_prompt()`** from `agent.py` at runtime, so every experiment correctly reflects whatever the agent committed in step 3.
 
 ### Per-case evaluation flow
 
@@ -305,9 +286,9 @@ Winning `agent.py` config is reviewed by the human, then manually merged to `mai
 
 `eval_harness.py` dynamically imports `agent.py` at runtime to read `SYSTEM_PROMPT` and `_build_prompt()`, then calls the Anthropic API directly. No Claude Agent SDK, no Docker, no backend required for the research loop.
 
-Dependency: `ANTHROPIC_API_KEY` must be set in the environment before running any experiment.
+Dependency: `claude` CLI must be installed and authenticated (standard Claude Code setup — no additional API key required).
 
-The production `LocalClaudeRemediator` in `agent.py` (which uses the Claude Agent SDK) is unchanged and untouched by this system. The research loop and the production pipeline are completely independent.
+The production `LocalClaudeRemediator` in `agent.py` is used as-is. Eval harness and production pipeline share the same remediator class.
 
 ---
 
