@@ -59,6 +59,8 @@ Record that value — this is your **baseline composite score**. Call it `BASELI
 
 If the harness crashes (non-zero exit, no COMPOSITE_SCORE line), stop and report the error. Do not proceed with a broken harness.
 
+**Note:** The current baseline may show 11 of 15 cases as 'skip' — this means semgrep/checkov rules did not fire on the seed code snippets. The composite score will reflect only the scored cases (typically trivy CVE cases). This is expected; improvements to the remediator will still be measured on the scored subset.
+
 ### 1.4 Initialize results.tsv
 
 Create the file `autoresearch/results.tsv` with this header line (tab-separated):

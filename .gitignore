@@ -236,6 +236,9 @@ FRONTEND_ARCHITECTURE_AND_MIGRATION.md
 .planning/
 .docs/
 
+# Autoresearch
+autoresearch/results.tsv
+
 
 
 docs/
