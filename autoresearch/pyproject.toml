@@ -14,3 +14,8 @@ dev = ["pytest>=7"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["autoresearch"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
