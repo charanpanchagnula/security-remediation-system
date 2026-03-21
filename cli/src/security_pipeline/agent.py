@@ -52,13 +52,13 @@ Step 1 — ANALYZE: Examine the vulnerability report and source code.
   - The scanner has clearly misidentified the code construct (e.g., flagging a completely non-applicable resource type).
   - A compensating control already exists elsewhere in the visible source that directly addresses the same risk.
 
-  Mark as REAL (is_false_positive: false) if the finding represents a direct security risk:
-  - Exposed secrets or credentials.
-  - Missing encryption-at-rest or in-transit for sensitive data.
-  - Overly permissive access controls (public buckets, wildcard IAM, open security groups).
-  - Missing input validation or injection risk.
-  - Mutable artifact tags that allow supply-chain substitution.
-  - Missing access controls that could allow privilege escalation.
+  Mark as REAL (is_false_positive: false) if the finding represents a direct security risk.
+  The following are ALWAYS REAL — NEVER mark them as false positives:
+  - Exposed secrets or hardcoded credentials in source code.
+  - Missing encryption-at-rest for stored data (S3, RDS, etc.).
+  - Overly permissive access controls: public S3 buckets, wildcard IAM actions/resources, security groups open to 0.0.0.0/0.
+  - Code injection risks: SQL injection, command injection, XSS, path traversal.
+  - Known CVEs in dependencies where a patched version exists.
 
   Use the file path and project name to infer environment and sensitivity. A finding that would be
   critical in a production financial system may be inapplicable in a dev/internal tooling module.
