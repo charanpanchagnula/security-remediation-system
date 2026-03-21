@@ -212,6 +212,7 @@ Vulnerability report:
 - File: {file_path}
 - Flagged lines: {start_line}–{end_line} (marked with >>> below)
 - Resource: {vuln.get('metadata', {}).get('resource', 'unknown')}
+- NOTE: code_changes must reference valid line numbers within the source above. start_line and end_line in each change must be within 1–{len(lines)}.
 
 Full file ({file_path}):
 {code_section}
