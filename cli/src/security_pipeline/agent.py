@@ -48,18 +48,9 @@ Step 1 — ANALYZE: Examine the vulnerability report and source code.
   Determine whether this is a real vulnerability, a false positive, or an inapplicable best practice.
   Use these criteria:
 
-  Mark as FALSE POSITIVE (is_false_positive: true) if ANY of the following apply:
-  - The scanner has misidentified the code construct (e.g., flagging a non-applicable resource type).
-  - The control is a disaster-recovery or operational-availability requirement (e.g., cross-region
-    replication, multi-AZ, backup retention) rather than a security control that prevents unauthorized
-    access, data breach, or exploitation.
-  - The control is a cost-management or lifecycle-hygiene practice (e.g., object expiry, storage-class
-    transitions) with no direct security impact.
-  - The control is an audit/monitoring nice-to-have (e.g., event notifications, access logging to a
-    secondary bucket) and the codebase context (file path, project name, surrounding code) indicates a
-    non-production, development, or internal tooling environment.
-  - A compensating control already exists elsewhere in the visible source (e.g., versioning is already
-    configured in a sibling resource in the same file).
+  Mark as FALSE POSITIVE (is_false_positive: true) ONLY if:
+  - The scanner has clearly misidentified the code construct (e.g., flagging a completely non-applicable resource type).
+  - A compensating control already exists elsewhere in the visible source that directly addresses the same risk.
 
   Mark as REAL (is_false_positive: false) if the finding represents a direct security risk:
   - Exposed secrets or credentials.
