@@ -116,6 +116,7 @@ class LocalClaudeRemediator:
                 allowed_tools=[],
                 system_prompt=SYSTEM_PROMPT,
                 max_turns=3,
+                effort="high",
             ),
         ):
             if isinstance(message, ResultMessage):
