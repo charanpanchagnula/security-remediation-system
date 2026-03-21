@@ -1,0 +1,13 @@
+{
+  "id": "flask_cve_001",
+  "scanner": "trivy",
+  "vuln_type": "flask_cve",
+  "language": "python",
+  "file_path": "requirements.txt",
+  "expected_rule_id": "CVE-2023-30861",
+  "expected_severity": "HIGH",
+  "message": "Flask session cookie not validated. Upgrade to Flask 2.3.2 or later.",
+  "start_line": 1,
+  "end_line": 1,
+  "vulnerable_code": "flask==2.2.0"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "yaml_unsafe_001",
+  "scanner": "semgrep",
+  "vuln_type": "unsafe_deserialization",
+  "language": "python",
+  "file_path": "app.py",
+  "expected_rule_id": "python.lang.security.audit.yaml-unsafe.yaml-unsafe-load",
+  "expected_severity": "HIGH",
+  "message": "Unsafe use of yaml.load() without a safe Loader. Use yaml.safe_load() or yaml.load(data, Loader=yaml.SafeLoader) to prevent arbitrary code execution.",
+  "start_line": 7,
+  "end_line": 7,
+  "vulnerable_code": "import yaml\nfrom flask import Flask, request, jsonify\n\napp = Flask(__name__)\n\n@app.route('/parse', methods=['POST'])\ndef parse_config():\n    data = request.get_data(as_text=True)\n    config = yaml.load(data)\n    return jsonify(config)"
+}

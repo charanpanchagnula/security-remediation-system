@@ -1,0 +1,13 @@
+{
+  "id": "codeql_sql_injection_001",
+  "scanner": "codeql",
+  "vuln_type": "sql_injection",
+  "language": "python",
+  "file_path": "app.py",
+  "expected_rule_id": "py/sql-injection",
+  "expected_severity": "HIGH",
+  "message": "Query built by string concatenation with a user-supplied value. Use parameterized queries to prevent SQL injection.",
+  "start_line": 11,
+  "end_line": 11,
+  "vulnerable_code": "import sqlite3\nfrom flask import Flask, request\n\napp = Flask(__name__)\n\n@app.route('/user')\ndef get_user():\n    user_id = request.args.get('id')\n    conn = sqlite3.connect('db.sqlite3')\n    cursor = conn.cursor()\n    cursor.execute('SELECT * FROM users WHERE id = ' + user_id)\n    return str(cursor.fetchall())"
+}

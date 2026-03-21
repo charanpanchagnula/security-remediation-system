@@ -1,0 +1,13 @@
+{
+  "id": "s3_versioning_001",
+  "scanner": "checkov",
+  "vuln_type": "s3_no_versioning",
+  "language": "terraform",
+  "file_path": "main.tf",
+  "expected_rule_id": "CKV_AWS_21",
+  "expected_severity": "MEDIUM",
+  "message": "S3 bucket does not have versioning enabled. Enable versioning to protect against accidental deletion and to maintain object history.",
+  "start_line": 1,
+  "end_line": 3,
+  "vulnerable_code": "resource \"aws_s3_bucket\" \"example\" {\n  bucket = \"my-no-version-bucket\"\n}"
+}

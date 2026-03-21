@@ -1,0 +1,13 @@
+{
+  "id": "codeql_path_traversal_001",
+  "scanner": "codeql",
+  "vuln_type": "path_traversal",
+  "language": "python",
+  "file_path": "app.py",
+  "expected_rule_id": "py/path-injection",
+  "expected_severity": "HIGH",
+  "message": "User-controlled filename used in file path. Validate and sanitize the filename to prevent path traversal attacks.",
+  "start_line": 10,
+  "end_line": 10,
+  "vulnerable_code": "import os\nfrom flask import Flask, request, send_file\n\napp = Flask(__name__)\n\n@app.route('/download')\ndef download():\n    filename = request.args.get('file')\n    path = os.path.join('/var/data', filename)\n    return send_file(path)"
+}

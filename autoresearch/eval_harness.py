@@ -20,7 +20,7 @@ if str(_CLI_SRC) not in sys.path:
 import json
 
 from autoresearch.patch_applier import apply_patch, count_changed_lines
-from autoresearch.scanner_parsers import run_checkov, run_semgrep, run_trivy
+from autoresearch.scanner_parsers import run_checkov, run_codeql, run_semgrep, run_trivy
 
 
 # ---------------------------------------------------------------------------
@@ -31,7 +31,7 @@ from autoresearch.scanner_parsers import run_checkov, run_semgrep, run_trivy
 def load_benchmark_cases(benchmark_dir: Path) -> list[dict]:
     """Load all JSON case files from benchmark_dir/{semgrep,checkov,trivy}/*.json."""
     cases: list[dict] = []
-    for scanner_name in ("semgrep", "checkov", "trivy"):
+    for scanner_name in ("semgrep", "checkov", "trivy", "codeql"):
         scanner_dir = benchmark_dir / scanner_name
         if not scanner_dir.is_dir():
             continue
@@ -184,6 +184,7 @@ def run_full_harness(
         "semgrep": run_semgrep,
         "checkov": run_checkov,
         "trivy": run_trivy,
+        "codeql": run_codeql,
     }
 
     cases = load_benchmark_cases(benchmark_dir)

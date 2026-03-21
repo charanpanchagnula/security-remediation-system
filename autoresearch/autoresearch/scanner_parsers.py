@@ -231,6 +231,138 @@ def run_checkov(code: str, file_path: str = "main.tf") -> list[dict[str, Any]]:
         Path(tmp_path).unlink(missing_ok=True)
 
 
+def parse_codeql_sarif(data: dict[str, Any], file_path: str) -> list[dict[str, Any]]:
+    """Parse CodeQL SARIF output into canonical vulnerability dicts.
+
+    Args:
+        data: Parsed SARIF JSON dict from ``codeql database analyze --format=sarif-latest``.
+        file_path: Only return results whose URI ends with this value.
+
+    Returns:
+        List of vulnerability dicts.
+    """
+    _CODEQL_SEVERITY_MAP: dict[str, str] = {
+        "error": "HIGH",
+        "warning": "MEDIUM",
+        "note": "LOW",
+        "recommendation": "LOW",
+    }
+    vulns: list[dict[str, Any]] = []
+    for run in data.get("runs", []):
+        # Build rule metadata index for severity lookup.
+        rule_meta: dict[str, dict] = {}
+        driver = run.get("tool", {}).get("driver", {})
+        for rule in driver.get("rules", []):
+            rule_meta[rule.get("id", "")] = rule
+
+        for result in run.get("results", []):
+            rule_id = result.get("ruleId", "")
+            locations = result.get("locations", [])
+            if not locations:
+                continue
+            phys = locations[0].get("physicalLocation", {})
+            uri = phys.get("artifactLocation", {}).get("uri", "")
+            if not (uri == file_path or uri.endswith("/" + file_path) or uri.endswith(file_path)):
+                continue
+            region = phys.get("region", {})
+            start_line = region.get("startLine", 1)
+            end_line = region.get("endLine", start_line)
+
+            # Determine severity from rule properties or result level.
+            meta = rule_meta.get(rule_id, {})
+            props = meta.get("properties", {})
+            raw_sev = (
+                props.get("severity")
+                or props.get("problem.severity")
+                or result.get("level", "warning")
+            ).lower()
+            severity = _CODEQL_SEVERITY_MAP.get(raw_sev, "MEDIUM")
+
+            message = result.get("message", {}).get("text", "")
+            vuln: dict[str, Any] = {
+                "scanner": "codeql",
+                "rule_id": rule_id,
+                "severity": severity,
+                "message": message,
+                "file_path": file_path,
+                "start_line": start_line,
+                "end_line": end_line,
+                "metadata": {"resource": ""},
+            }
+            vulns.append(vuln)
+    return vulns
+
+
+def run_codeql(code: str, file_path: str = "code.py") -> list[dict[str, Any]]:
+    """Write *code* to a temp dir, create a CodeQL database, analyze, return results.
+
+    Requires the ``codeql`` CLI to be installed and on PATH, and the
+    ``codeql/python-queries`` pack to be available (downloaded via
+    ``codeql pack download codeql/python-queries``).
+
+    Args:
+        code: Python source code to analyze.
+        file_path: Filename hint used as the source file name inside the temp dir.
+
+    Returns:
+        List of vulnerability dicts, or ``[]`` if CodeQL is not installed,
+        database creation fails, or the analysis times out.
+    """
+    import shutil
+
+    if shutil.which("codeql") is None:
+        return []
+
+    suffix = Path(file_path).suffix or ".py"
+    language = "python" if suffix == ".py" else "javascript"
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_dir = Path(tmp_dir) / "src"
+            src_dir.mkdir()
+            src_file = src_dir / Path(file_path).name
+            src_file.write_text(code)
+            db_dir = Path(tmp_dir) / "db"
+            sarif_out = Path(tmp_dir) / "results.sarif"
+
+            # Create database.
+            create_proc = subprocess.run(
+                [
+                    "codeql", "database", "create",
+                    str(db_dir),
+                    f"--language={language}",
+                    f"--source-root={src_dir}",
+                    "--overwrite",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if create_proc.returncode != 0:
+                return []
+
+            # Analyze with standard security queries.
+            analyze_proc = subprocess.run(
+                [
+                    "codeql", "database", "analyze",
+                    str(db_dir),
+                    f"codeql/{language}-queries:codeql-suites/{language}-security-extended.qls",
+                    "--format=sarif-latest",
+                    f"--output={sarif_out}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            if analyze_proc.returncode != 0 or not sarif_out.exists():
+                return []
+
+            data = json.loads(sarif_out.read_text())
+            return parse_codeql_sarif(data, file_path)
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
+        return []
+
+
 def run_trivy(code: str, file_path: str = "requirements.txt") -> list[dict[str, Any]]:
     """Write *code* to a temp dir, run trivy fs, return parsed results.
 

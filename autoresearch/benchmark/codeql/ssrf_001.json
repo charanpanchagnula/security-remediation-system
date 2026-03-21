@@ -1,0 +1,13 @@
+{
+  "id": "codeql_ssrf_001",
+  "scanner": "codeql",
+  "vuln_type": "ssrf",
+  "language": "python",
+  "file_path": "app.py",
+  "expected_rule_id": "py/full-ssrf",
+  "expected_severity": "HIGH",
+  "message": "User-controlled URL passed to HTTP request. Validate and whitelist allowed URLs to prevent server-side request forgery.",
+  "start_line": 9,
+  "end_line": 9,
+  "vulnerable_code": "import requests\nfrom flask import Flask, request, jsonify\n\napp = Flask(__name__)\n\n@app.route('/proxy')\ndef proxy():\n    url = request.args.get('url')\n    resp = requests.get(url)\n    return jsonify({'body': resp.text[:500]})"
+}

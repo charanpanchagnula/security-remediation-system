@@ -1,0 +1,13 @@
+{
+  "id": "cloudtrail_multiregion_001",
+  "scanner": "checkov",
+  "vuln_type": "cloudtrail_not_multiregion",
+  "language": "terraform",
+  "file_path": "main.tf",
+  "expected_rule_id": "CKV_AWS_67",
+  "expected_severity": "MEDIUM",
+  "message": "CloudTrail is not enabled in all regions. Set is_multi_region_trail = true to capture API calls across all AWS regions.",
+  "start_line": 1,
+  "end_line": 4,
+  "vulnerable_code": "resource \"aws_cloudtrail\" \"example\" {\n  name           = \"my-trail\"\n  s3_bucket_name = \"my-trail-bucket\"\n}"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "kms_rotation_001",
+  "scanner": "checkov",
+  "vuln_type": "kms_no_rotation",
+  "language": "terraform",
+  "file_path": "main.tf",
+  "expected_rule_id": "CKV_AWS_7",
+  "expected_severity": "MEDIUM",
+  "message": "KMS key does not have automatic rotation enabled. Set enable_key_rotation = true to rotate the key material annually.",
+  "start_line": 1,
+  "end_line": 3,
+  "vulnerable_code": "resource \"aws_kms_key\" \"example\" {\n  description = \"Application encryption key\"\n}"
+}

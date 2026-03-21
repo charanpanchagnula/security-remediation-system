@@ -1,0 +1,13 @@
+{
+  "id": "ssrf_001",
+  "scanner": "semgrep",
+  "vuln_type": "ssrf",
+  "language": "python",
+  "file_path": "app.py",
+  "expected_rule_id": "python.requests.security.ssrf.ssrf-requests",
+  "expected_severity": "HIGH",
+  "message": "Potential SSRF vulnerability. User-controlled URL passed to requests library. Validate and whitelist allowed URLs before making outbound HTTP requests.",
+  "start_line": 6,
+  "end_line": 6,
+  "vulnerable_code": "import requests\nfrom flask import Flask, request, jsonify\n\napp = Flask(__name__)\n\n@app.route('/fetch')\ndef fetch_url():\n    url = request.args.get('url')\n    resp = requests.get(url)\n    return jsonify({'status': resp.status_code, 'body': resp.text[:500]})"
+}
