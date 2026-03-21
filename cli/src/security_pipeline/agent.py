@@ -202,8 +202,15 @@ class LocalClaudeRemediator:
                 annotated.append(f"{i:4d}     {line}")
         code_section = "\n".join(annotated)
 
+        fix_guidance = {
+            'semgrep': 'Replace the vulnerable code pattern with a secure equivalent (e.g., parameterized queries, safe APIs).',
+            'checkov': 'Add or modify Terraform resource attributes/blocks to satisfy the security control. A separate linked resource may be required.',
+            'trivy': 'Update the vulnerable package to the minimum safe version in the manifest.',
+        }.get(scanner, 'Produce a minimal, correct fix.')
+
         return f"""# Scanner context
 {scanner_context} File type: {file_context}.
+Fix guidance: {fix_guidance}
 
 Vulnerability report:
 - Scanner: {vuln.get('scanner')}
