@@ -9,5 +9,5 @@
   "message": "User-controlled data in SQL query formatted string. Avoid format strings in SQL queries - use parameterized queries instead.",
   "start_line": 5,
   "end_line": 6,
-  "vulnerable_code": "    query = f\"SELECT * FROM users WHERE id = {user_id}\"\n    cursor.execute(query)"
+  "vulnerable_code": "import sqlite3\ndef get_user(user_id):\n    conn = sqlite3.connect(\"db.sqlite\")\n    cursor = conn.cursor()\n    query = f\"SELECT * FROM users WHERE id = {user_id}\"\n    cursor.execute(query)"
 }

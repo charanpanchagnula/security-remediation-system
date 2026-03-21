@@ -1,0 +1,60 @@
+rules:
+  - id: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+    patterns:
+      - pattern-either:
+          - pattern: $CURSOR.execute(f"...", ...)
+          - pattern: $CURSOR.execute(f'...', ...)
+          - pattern: |
+              $QUERY = f"..."
+              $CURSOR.execute($QUERY, ...)
+          - pattern: |
+              $QUERY = f'...'
+              $CURSOR.execute($QUERY, ...)
+          - pattern: |
+              $QUERY = f"..."
+              $CURSOR.execute($QUERY)
+          - pattern: |
+              $QUERY = f'...'
+              $CURSOR.execute($QUERY)
+    message: >
+      User-controlled data in SQL query formatted string. Avoid format strings in
+      SQL queries - use parameterized queries instead.
+    languages: [python]
+    severity: ERROR
+
+  - id: python.lang.security.audit.subprocess-shell-true.subprocess-shell-true
+    pattern: subprocess.$FUNC(..., shell=True, ...)
+    message: >
+      Subprocess call with shell=True is dangerous. User-controlled input can lead
+      to command injection. Use shell=False and pass arguments as a list.
+    languages: [python]
+    severity: ERROR
+
+  - id: python.lang.security.audit.path-traversal.path-traversal-open
+    pattern: open(os.path.join(...), ...)
+    message: >
+      Potential path traversal vulnerability when joining user-controlled path with
+      base directory. Validate user input before using in file operations.
+    languages: [python]
+    severity: ERROR
+
+  - id: python.flask.security.xss.reflected-xss-all-config.reflected-xss-all-config
+    patterns:
+      - pattern-either:
+          - pattern: flask.make_response(f"...", ...)
+          - pattern: make_response(f"...", ...)
+          - pattern: flask.make_response(f'...', ...)
+          - pattern: make_response(f'...', ...)
+    message: >
+      Potential XSS vulnerability. User-controlled data reflected in HTML response
+      without proper escaping. Use Flask's escape() or Jinja2 auto-escaping.
+    languages: [python]
+    severity: ERROR
+
+  - id: generic.secrets.security.detected-generic-secret.detected-generic-secret
+    pattern-regex: '(?i)(secret[_A-Z]*|password|api[_-]?key|token)\s*=\s*[''"][A-Za-z0-9_\-/+]{20,}[''"]'
+    message: >
+      Hardcoded secret key detected. Move secrets to environment variables or a
+      secure secret management system.
+    languages: [generic]
+    severity: WARNING

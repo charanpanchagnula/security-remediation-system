@@ -4,7 +4,7 @@
   "vuln_type": "sg_open_ingress",
   "language": "terraform",
   "file_path": "main.tf",
-  "expected_rule_id": "CKV_AWS_25",
+  "expected_rule_id": "CKV_AWS_24",
   "expected_severity": "HIGH",
   "message": "Security group allows SSH access from anywhere (0.0.0.0/0). Restrict to specific IP ranges.",
   "start_line": 2,

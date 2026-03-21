@@ -9,5 +9,5 @@
   "message": "Command injection vulnerability via template() function. Upgrade to 4.17.21 or later.",
   "start_line": 1,
   "end_line": 1,
-  "vulnerable_code": "\"lodash\": \"4.17.20\""
+  "vulnerable_code": "{\n  \"name\": \"myapp\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 2,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"myapp\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"lodash\": \"^4.17.20\"\n      }\n    },\n    \"node_modules/lodash\": {\n      \"version\": \"4.17.20\",\n      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\",\n      \"integrity\": \"sha512-PlhdFcillOINfeV7Ni6oF1TAEayyZBoZ8bcshTHqOYJYlrqzRK5hagpagky5o4HfCzzd1TRkXPMFq6cKk9rGmA==\"\n    }\n  },\n  \"dependencies\": {\n    \"lodash\": {\n      \"version\": \"4.17.20\",\n      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\",\n      \"integrity\": \"sha512-PlhdFcillOINfeV7Ni6oF1TAEayyZBoZ8bcshTHqOYJYlrqzRK5hagpagky5o4HfCzzd1TRkXPMFq6cKk9rGmA==\"\n    }\n  }\n}"
 }

@@ -9,5 +9,5 @@
   "message": "Potential XSS vulnerability. User-controlled data reflected in HTML response without proper escaping. Use Flask's escape() or Jinja2 auto-escaping.",
   "start_line": 14,
   "end_line": 14,
-  "vulnerable_code": "    return make_response(f'<h1>Hello {name}</h1>')"
+  "vulnerable_code": "from flask import Flask, request, make_response\n\n\napp = Flask(__name__)\n\n\ndef get_client_ip():\n    return request.remote_addr\n\n\n@app.route('/greet')\ndef greet():\n    name = request.args.get('name', 'World')\n    return make_response(f'<h1>Hello {name}</h1>')"
 }

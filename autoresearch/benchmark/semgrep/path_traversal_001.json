@@ -9,5 +9,5 @@
   "message": "Potential path traversal vulnerability when joining user-controlled path with base directory. Validate user input before using in file operations.",
   "start_line": 8,
   "end_line": 8,
-  "vulnerable_code": "    file = open(os.path.join('/uploads', filename), 'r')"
+  "vulnerable_code": "import os\nfrom flask import request\n\n\ndef upload_handler():\n    filename = request.args.get('filename', '')\n    log_access = lambda x: None\n    file = open(os.path.join('/uploads', filename), 'r')"
 }

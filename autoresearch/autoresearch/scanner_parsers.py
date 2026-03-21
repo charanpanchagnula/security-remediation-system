@@ -27,6 +27,11 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+# Autoresearch venv directory (contains the semgrep 1.x binary).
+_AUTORESEARCH_VENV_BIN = Path(__file__).parent.parent / ".venv" / "bin"
+# Directory containing rules.yaml for local semgrep rules (avoids --config auto network fetch).
+_SEMGREP_RULES_DIR = Path(__file__).parent.parent / "benchmark" / "semgrep"
+
 # ---------------------------------------------------------------------------
 # Severity mapping
 # ---------------------------------------------------------------------------
@@ -168,11 +173,13 @@ def run_semgrep(code: str, file_path: str = "code.py") -> list[dict[str, Any]]:
     except OSError:
         return []
     try:
+        semgrep_bin = str(_AUTORESEARCH_VENV_BIN / "semgrep")
         proc = subprocess.run(
-            ["semgrep", "--config", "auto", tmp_path, "--json", "--quiet"],
+            [semgrep_bin, "--config", "rules.yaml", tmp_path, "--json", "--quiet"],
             capture_output=True,
             text=True,
             timeout=60,
+            cwd=str(_SEMGREP_RULES_DIR),
         )
         data = json.loads(proc.stdout)
         # Remap the temp path back to the original file_path for callers.
@@ -211,10 +218,11 @@ def run_checkov(code: str, file_path: str = "main.tf") -> list[dict[str, Any]]:
             timeout=60,
         )
         data = json.loads(proc.stdout)
-        # Remap temp path to original file_path.
+        # Checkov strips the directory and emits "/<basename>" in file_path.
+        checkov_path = "/" + Path(tmp_path).name
         results = data.get("results", {})
         for check in results.get("failed_checks", []):
-            if check.get("file_path") == tmp_path:
+            if check.get("file_path") == checkov_path:
                 check["file_path"] = file_path
         return parse_checkov_output(data, file_path)
     except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):

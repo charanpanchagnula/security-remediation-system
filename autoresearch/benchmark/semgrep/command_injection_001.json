@@ -9,5 +9,5 @@
   "message": "Subprocess call with shell=True is dangerous. User-controlled input can lead to command injection. Use shell=False and pass arguments as a list.",
   "start_line": 11,
   "end_line": 11,
-  "vulnerable_code": "    subprocess.run(f\"ls -la {user_dir}\", shell=True)"
+  "vulnerable_code": "import subprocess\nimport os\n\n\ndef list_directory(user_dir):\n    if not user_dir:\n        return None\n    base = \"/var/www\"\n    if not os.path.isabs(user_dir):\n        user_dir = os.path.join(base, user_dir)\n    subprocess.run(f\"ls -la {user_dir}\", shell=True)"
 }
