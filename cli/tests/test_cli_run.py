@@ -83,7 +83,7 @@ def test_run_remediate_all_loop_returns_summary(tmp_path):
     mock_client.request_remediation.return_value = {"status": "completed"}
 
     with patch("security_pipeline.cli._poll_until_complete", return_value=scan_data), \
-         patch("security_pipeline.cli._run_revalidation", return_value=reval_data), \
+         patch("security_pipeline.cli._run_batch_revalidation", return_value=reval_data), \
          patch("security_pipeline.cli.get_archive_path", return_value=None):
 
         # Patch the remediation polling loop to return patch immediately

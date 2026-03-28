@@ -620,6 +620,8 @@ def _run_remediate_all_loop(
     target: Path,
     severity: Optional[str] = None,
     use_local_claude: bool = True,
+    use_multi_turn: bool = False,
+    max_iterations: int = 6,
     quiet: bool = False,
     scanners: list | None = None,
 ) -> dict:
@@ -700,6 +702,13 @@ def _run_remediate_all_loop(
     if not use_local_claude and not quiet:
         console.print("[dim]Using backend remediation engine[/dim]")
 
+    if use_multi_turn:
+        from .multi_turn_agent import MultiTurnRemediator, CLAUDE_SDK_AVAILABLE as MT_AVAILABLE
+        if not MT_AVAILABLE:
+            if not quiet:
+                rprint("[yellow]claude_agent_sdk unavailable — falling back to single-shot[/yellow]")
+            use_multi_turn = False
+
     skipped = 0
     patchable: list = []   # (vuln, patch) pairs with real code_changes
 
@@ -722,7 +731,15 @@ def _run_remediate_all_loop(
             continue
 
         try:
-            if use_local_claude:
+            if use_multi_turn:
+                if not quiet:
+                    console.print("[dim]Using multi-turn Claude (iterative loop)[/dim]")
+                vuln_detail = client.get_vulnerability(scan_id, vuln_id)
+                mt = MultiTurnRemediator(max_iterations=max_iterations)
+                patch, iteration_log = mt.remediate(vuln_detail, work_dir=str(target))
+                patch["iteration_log"] = iteration_log
+
+            if not use_multi_turn and use_local_claude:
                 vuln_detail = client.get_vulnerability(scan_id, vuln_id)
                 full_file_path = target / vuln_detail.get("file_path", "")
                 if full_file_path.is_file():
@@ -730,7 +747,7 @@ def _run_remediate_all_loop(
                 else:
                     source = vuln_detail.get("surrounding_context", "") or vuln_detail.get("code_snippet", "")
                 patch = remediator.generate_patch(vuln_detail, source)
-            else:
+            elif not use_multi_turn:
                 client.request_remediation(scan_id, vuln_id)
                 for _ in range(60):
                     scan_data = client.get_scan(scan_id)
@@ -754,9 +771,14 @@ def _run_remediate_all_loop(
 
             patch["vuln_id"] = vuln_id
             patch["scan_id"] = scan_id
-            patch["generated_by"] = "local_claude" if use_local_claude else "backend_engine"
+            patch["generated_by"] = "multi_turn" if use_multi_turn else ("local_claude" if use_local_claude else "backend_engine")
             patch["created_at"] = datetime.utcnow().isoformat()
+            # Pop iteration_log BEFORE writing patch.json so it doesn't appear in both files
+            iter_log = patch.pop("iteration_log", None)
             patch_file.write_text(json.dumps(patch, indent=2))
+            if iter_log:
+                iter_log_file = patch_dir / "iteration_log.json"
+                iter_log_file.write_text(json.dumps(iter_log, indent=2))
             if not quiet:
                 console.print(f"  [green]✓[/green] Patch generated  confidence: {patch.get('confidence_score', 0):.2f}")
 
@@ -873,6 +895,8 @@ def remediate_all(
     scan_id: str = typer.Argument(..., help="Scan ID to remediate"),
     use_backend: bool = typer.Option(False, "--use-backend", help="Use backend AI engine instead of local Claude Agent SDK"),
     severity: Optional[str] = typer.Option(None, "--severity", help="Comma-separated severities to include, e.g. CRITICAL,HIGH"),
+    multi_turn: bool = typer.Option(False, "--multi-turn", help="Use iterative multi-turn agent loop"),
+    max_iterations: int = typer.Option(6, "--max-iterations", help="Max iterations per vulnerability (multi-turn only)"),
     api_url: Optional[str] = typer.Option(None, "--api-url"),
 ):
     """Generate patches and run batch revalidation for a completed scan. Default: local Claude."""
@@ -891,6 +915,8 @@ def remediate_all(
             target=Path(entry["path"]),
             severity=severity,
             use_local_claude=not use_backend,
+            use_multi_turn=multi_turn,
+            max_iterations=max_iterations,
             quiet=False,
             scanners=entry.get("scanners"),
         )
