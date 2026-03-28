@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime
@@ -213,6 +214,18 @@ class Orchestrator:
             if not results:
                  # If we didn't even start scanners, log it
                  logger.error("No scans performed due to setup failure.")
+
+        # Persist workspace for autonomous remediation (copy before tmp cleanup)
+        persistent_workspace = None
+        try:
+            if tmp_dir and extract_dir.exists():
+                persistent_workspace = Path(settings.WORK_DIR) / "workspaces" / scan_id
+                shutil.copytree(str(extract_dir), str(persistent_workspace), dirs_exist_ok=True)
+                logger.info(f"Workspace persisted to {persistent_workspace}")
+        except Exception as e:
+            logger.warning(f"Failed to persist workspace for {scan_id}: {e}")
+            persistent_workspace = None
+
         finally:
             if tmp_dir:
                 await asyncio.to_thread(tmp_dir.cleanup)
@@ -238,7 +251,7 @@ class Orchestrator:
             "vulnerabilities": [v.model_dump() for v in all_vulnerabilities],
             "remediations": [],
             "scanner_types": scanner_types,
-            "work_dir": str(extract_dir),
+            "work_dir": str(persistent_workspace) if persistent_workspace else str(extract_dir),
             "summary": {
                 "total_vulnerabilities": len(all_vulnerabilities),
                 "remediations_generated": 0,

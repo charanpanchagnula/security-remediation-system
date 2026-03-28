@@ -1,8 +1,11 @@
+import shutil
+from pathlib import Path
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 from ..agents.orchestrator import orchestrator
 from ..services.results import result_service
+from ..config import settings
 from ..logger import get_logger
 
 logger = get_logger(__name__)
@@ -106,6 +109,10 @@ async def delete_scan(scan_id: str):
     """Delete a scan result."""
     try:
         result_service.delete_scan(scan_id)
+        # Clean up persistent workspace if it exists
+        workspace = Path(settings.WORK_DIR) / "workspaces" / scan_id
+        if workspace.exists():
+            shutil.rmtree(str(workspace), ignore_errors=True)
         return {"status": "deleted", "scan_id": scan_id}
     except Exception as e:
         logger.error(f"Failed to delete scan: {e}", exc_info=True)

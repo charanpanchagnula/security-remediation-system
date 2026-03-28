@@ -262,3 +262,45 @@ async def test_batch_returns_early_when_scan_missing():
         from remediation_api.agents.orchestrator import Orchestrator
         await Orchestrator().batch_remediate_scan("nonexistent")
     gen.generate_fix.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_process_scan_job_persists_workspace():
+    """workspace is copied to {WORK_DIR}/workspaces/{scan_id} and saved in final_result"""
+    import tempfile, os
+    from pathlib import Path
+    from unittest.mock import AsyncMock, patch, MagicMock
+    with patch("remediation_api.agents.orchestrator.result_service") as svc, \
+         patch("remediation_api.agents.orchestrator.get_vector_store", return_value=_make_vs()), \
+         patch("remediation_api.agents.orchestrator.scanner_service") as sc:
+        # fake workspace
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "source"
+            src.mkdir()
+            (src / "app.py").write_text("print('hello')")
+            fake_tmp = MagicMock()
+            fake_tmp.name = tmp
+            fake_tmp.cleanup = MagicMock()
+            sc.prepare_workspace = AsyncMock(return_value=fake_tmp)
+            sc.scan_directory = AsyncMock(return_value=[])
+            svc.get_scan.return_value = {}
+            with patch("remediation_api.agents.orchestrator.settings") as cfg:
+                cfg.WORK_DIR = tmp
+                cfg.USE_LEGACY_SINGLE_SHOT = False
+                from remediation_api.agents.orchestrator import Orchestrator
+                await Orchestrator().process_scan_job({
+                    "scan_id": "test-ws-123",
+                    "repo_url": "local://test",
+                    "commit_sha": None,
+                    "branch": "main",
+                    "archive_key": "archives/test.tar.gz",
+                    "scanner_types": ["semgrep"],
+                    "timestamp": "2026-01-01T00:00:00"
+                })
+            # workspace should be persisted
+            persistent = Path(tmp) / "workspaces" / "test-ws-123"
+            assert persistent.exists(), "workspace not persisted"
+            assert (persistent / "app.py").exists(), "files not copied"
+            # work_dir in saved result should be persistent path
+            saved = svc.save_scan_result.call_args_list[-1][0][1]
+            assert saved["work_dir"] == str(persistent)
