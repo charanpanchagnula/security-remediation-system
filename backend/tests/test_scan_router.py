@@ -12,13 +12,10 @@ from fastapi.testclient import TestClient
 @pytest.fixture(scope="module")
 def client():
     """
-    Build the app once with worker and vector store mocked so no background
-    threads or LLM connections are made during tests.
+    Build the app once with worker mocked so no background threads or LLM
+    connections are made during tests.
     """
-    with patch("remediation_api.agents.orchestrator.get_vector_store", return_value=MagicMock()), \
-         patch("remediation_api.agents.orchestrator.generator_agent"), \
-         patch("remediation_api.agents.orchestrator.evaluator_agent"), \
-         patch("remediation_api.main.run_worker", new_callable=AsyncMock):
+    with patch("remediation_api.main.run_worker", new_callable=AsyncMock):
         from remediation_api.main import app
         with TestClient(app, raise_server_exceptions=True) as c:
             yield c

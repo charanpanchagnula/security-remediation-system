@@ -71,9 +71,7 @@ def test_delete_scan_removes_result_json(tmp_path):
     svc = _make_service(tmp_path)
     _write_scan(svc, {"scan_id": "scan-del", "status": "completed", "summary": {}})
     assert svc.get_scan("scan-del") is not None
-    with patch("remediation_api.vector.store.get_vector_store") as mock_vs_factory:
-        mock_vs_factory.return_value = MagicMock()
-        svc.delete_scan("scan-del")
+    svc.delete_scan("scan-del")
     assert svc.get_scan("scan-del") is None
 
 
