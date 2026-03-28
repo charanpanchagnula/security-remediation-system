@@ -326,14 +326,14 @@ class Orchestrator:
         # Actually, let's just iterate and call _process
         
         current_rems = scan_data.get("remediations", [])
-        existing_rule_ids = {r["vulnerability_id"] for r in current_rems}
-        
+        existing_vuln_ids = {r["vulnerability_id"] for r in current_rems}
+
         logger.info(f"Batch remediation for {scan_id}: {len(vulnerabilities)} vulns")
-        
+
         # Iterate
         new_rems = []
         for v_dict in vulnerabilities:
-            if v_dict["rule_id"] in existing_rule_ids:
+            if v_dict["id"] in existing_vuln_ids:
                 continue
                 
             vuln_obj = Vulnerability(**v_dict)
@@ -343,8 +343,8 @@ class Orchestrator:
                     rem = await self._process_vulnerability(vuln_obj, scan_data["repo_url"], scan_id, git_ref)
                 else:
                     work_dir = scan_data.get("work_dir") or scan_data.get("source_dir", "")
-                    if not work_dir:
-                        logger.warning(f"No work_dir in scan_data for {scan_id}, falling back to legacy")
+                    if not work_dir or not Path(work_dir).exists():
+                        logger.warning(f"No work_dir available for {scan_id}, falling back to legacy")
                         rem = await self._process_vulnerability(vuln_obj, scan_data["repo_url"], scan_id, git_ref)
                     else:
                         rem = await self._process_vulnerability_autonomous(vuln_obj, work_dir, scan_id)
@@ -498,8 +498,8 @@ class Orchestrator:
         (syntax + security rescan), and refines iteratively.
         """
         agent = AutonomousRemediatorAgent(
-            model_id=getattr(settings, "REMEDIATION_MODEL", "deepseek-chat"),
-            max_iterations=getattr(settings, "MAX_ITERATIONS", 6),
+            model_id=settings.REMEDIATION_MODEL,
+            max_iterations=settings.MAX_ITERATIONS,
         )
         vuln_dict = {
             "scanner": vuln.scanner,
