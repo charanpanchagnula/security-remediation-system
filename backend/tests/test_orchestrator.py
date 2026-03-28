@@ -247,7 +247,7 @@ async def test_batch_skips_already_remediated():
          patch("remediation_api.agents.orchestrator.get_vector_store", return_value=_make_vs()), \
          patch("remediation_api.agents.orchestrator.generator_agent") as gen, \
          patch("remediation_api.agents.orchestrator.evaluator_agent"):
-        svc.get_scan.return_value = _scan(remediations=[_rem(vulnerability_id='semgrep.sql-injection').model_dump()])
+        svc.get_scan.return_value = _scan(remediations=[_rem(vulnerability_id='vuln-abc').model_dump()])
         from remediation_api.agents.orchestrator import Orchestrator
         await Orchestrator().batch_remediate_scan("scan-1")
     gen.generate_fix.assert_not_called()
