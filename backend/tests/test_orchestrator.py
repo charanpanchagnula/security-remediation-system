@@ -6,13 +6,11 @@ import asyncio
 import pytest
 from unittest.mock import MagicMock, patch
 
-# Pre-import so patch("remediation_api.agents.orchestrator.*") targets resolve.
 from unittest.mock import patch as _patch, MagicMock as _MagicMock
-with _patch("remediation_api.vector.store.get_vector_store", return_value=_MagicMock()):
-    import remediation_api.agents.orchestrator  # noqa: F401
+import remediation_api.agents.orchestrator  # noqa: F401
 
 from remediation_api.models.scan import Vulnerability
-from remediation_api.models.remediation import RemediationResponse, EvaluationResult
+from remediation_api.models.remediation import RemediationResponse
 
 
 def _vuln(**kw):

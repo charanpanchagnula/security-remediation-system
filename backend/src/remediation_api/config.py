@@ -25,9 +25,6 @@ class Settings(BaseSettings):
     SQS_QUEUE_URL: Optional[str] = None
     
     # Agent Settings
-    MAX_RETRIES: int = 2
-    CONFIDENCE_THRESHOLD: float = 0.7
-    USE_LEGACY_SINGLE_SHOT: bool = Field(False, description="Fall back to Generator+Evaluator loop instead of autonomous multi-turn agent")
     MAX_ITERATIONS: int = Field(6, description="Maximum validate_and_scan iterations for the autonomous agent")
     REMEDIATION_MODEL: str = Field("deepseek-chat", description="Model ID passed to AutonomousRemediatorAgent")
 

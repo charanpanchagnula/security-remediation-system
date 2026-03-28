@@ -148,16 +148,9 @@ class ResultService:
             except Exception as e:
                 logger.warning(f"Failed to delete archive {archive_key}: {e}")
                 
-        # 3. Delete Vectors
-        try:
-            # Import here to avoid potential circular header issues if any
-            from ..vector.store import get_vector_store
-            vector_store = get_vector_store()
-            vector_store.delete_scan(scan_id)
-        except Exception as e:
-             logger.warning(f"Failed to clean up vectors for {scan_id}: {e}")
+        # vector store removed — autonomous agent uses no RAG cache
 
-        # 4. Delete Result JSON
+        # 3. Delete Result JSON
         key = f"scans/{scan_id}.json"
         self.storage.delete_file(key)
         logger.info(f"Deleted scan result: {key}")

@@ -107,22 +107,30 @@ class RemediationToolkit(Toolkit):
         search_path = (self.work_dir / path).resolve()
         if not str(search_path).startswith(str(self.work_dir.resolve())):
             return "ERROR: path escapes working directory"
-        result = subprocess.run(
-            ["rg", "--json", "-n", query, str(search_path)],
-            capture_output=True, text=True, timeout=15
-        )
-        if result.returncode not in (0, 1):  # 1 = no matches (not an error)
-            return f"ERROR: {result.stderr[:200]}"
-        lines = []
-        for line in result.stdout.splitlines():
-            try:
-                obj = json.loads(line)
-                if obj.get("type") == "match":
-                    d = obj["data"]
-                    lines.append(f"{d['path']['text']}:{d['line_number']}: {d['lines']['text'].rstrip()}")
-            except Exception:
-                pass
-        result_str = "\n".join(lines) if lines else "(no matches)"
+        # Try ripgrep first, fall back to grep
+        try:
+            result = subprocess.run(
+                ["rg", "--json", "-n", query, str(search_path)],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode not in (0, 1):
+                raise FileNotFoundError("rg failed")
+            lines = []
+            for line in result.stdout.splitlines():
+                try:
+                    obj = json.loads(line)
+                    if obj.get("type") == "match":
+                        d = obj["data"]
+                        lines.append(f"{d['path']['text']}:{d['line_number']}: {d['lines']['text'].rstrip()}")
+                except Exception:
+                    pass
+            result_str = "\n".join(lines) if lines else "(no matches)"
+        except FileNotFoundError:
+            result = subprocess.run(
+                ["grep", "-rn", query, str(search_path)],
+                capture_output=True, text=True, timeout=15
+            )
+            result_str = result.stdout.strip() or "(no matches)"
         self.state.log_tool_call("search_code", {"query": query, "path": path}, result_str)
         return result_str
 
@@ -307,29 +315,91 @@ class AutonomousRemediatorAgent:
         self.model_id = model_id
         self.max_iterations = max_iterations
 
-    def remediate(self, vulnerability: dict, work_dir: str) -> tuple[dict, list]:
+    def remediate(self, vulnerability: dict, work_dir: str) -> tuple[dict, list, list]:
         """
         Run multi-turn tool-calling remediation.
-        Returns (patch_dict, iteration_log).
-        patch_dict is compatible with RemediationResponse.code_changes schema.
+        Returns (patch_dict, iteration_log, llm_messages).
+        iteration_log: per-validate_and_scan-call entries with full tool I/O.
+        llm_messages: manually constructed conversation showing prompt → tool calls → response.
         Raises ValueError if agent returns no result or non-JSON.
         """
         state = _IterationState()
         scanner = vulnerability.get("scanner", "semgrep")
+        prompt = self._build_prompt(vulnerability, work_dir)
         toolkit = RemediationToolkit(work_dir=work_dir, scanner=scanner, state=state)
         try:
             agent = Agent(
                 model=get_provider().get_model(self.model_id),
                 tools=[toolkit],
-                system_prompt=_SYSTEM_PROMPT.format(max_iterations=self.max_iterations),
+                instructions=_SYSTEM_PROMPT.format(max_iterations=self.max_iterations),
                 markdown=False,
             )
-            response = agent.run(self._build_prompt(vulnerability, work_dir))
+            response = agent.run(prompt)
             result_text = self._extract_text(response)
             patch = self._parse_json(result_text)
-            return patch, state.entries
+
+            # Flush any uncommitted tool calls (agent finished without calling validate_and_scan)
+            if state._tool_calls or state._actions:
+                state.commit(reasoning="agent completed without explicit validation call")
+
+            llm_messages = self._build_llm_messages(
+                system_prompt=_SYSTEM_PROMPT.format(max_iterations=self.max_iterations),
+                user_prompt=prompt,
+                response=response,
+                result_text=result_text,
+                state=state,
+            )
+            logger.info(f"[autonomous] llm_messages={len(llm_messages)} iteration_log={len(state.entries)}")
+            return patch, state.entries, llm_messages
         finally:
             toolkit.cleanup()
+
+    @staticmethod
+    def _build_llm_messages(
+        system_prompt: str,
+        user_prompt: str,
+        response,
+        result_text: str,
+        state: "_IterationState",
+    ) -> list:
+        """
+        Build a human-readable conversation log from what we know:
+          system → user → [tool calls per iteration] → assistant final response.
+
+        Agno doesn't expose intermediate messages without a database, so we
+        reconstruct the conversation from the prompt, the tool call log captured
+        in _IterationState, and the final response text.
+        """
+        messages = []
+
+        # 1. System prompt
+        messages.append({"role": "system", "content": system_prompt})
+
+        # 2. User prompt (vulnerability description)
+        messages.append({"role": "user", "content": user_prompt})
+
+        # 3. One assistant turn per iteration showing tool calls made
+        for entry in state.entries:
+            tool_calls = entry.get("tool_calls", [])
+            reasoning = entry.get("reasoning", "")
+            if tool_calls or reasoning:
+                msg: dict = {"role": "assistant"}
+                if reasoning:
+                    msg["reasoning"] = reasoning
+                if tool_calls:
+                    msg["tool_calls"] = tool_calls
+                messages.append(msg)
+
+        # 4. Top-level reasoning from the model (e.g. DeepSeek CoT)
+        top_reasoning = getattr(response, "reasoning_content", None)
+
+        # 5. Final assistant response (the JSON output)
+        final: dict = {"role": "assistant", "content": result_text}
+        if top_reasoning:
+            final["reasoning"] = top_reasoning
+        messages.append(final)
+
+        return messages
 
     def _build_prompt(self, vuln: dict, work_dir: str) -> str:
         scanner = vuln.get("scanner", "")

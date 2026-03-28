@@ -9,7 +9,7 @@ Covers:
 """
 import pytest
 from pydantic import ValidationError
-from remediation_api.models.remediation import CodeChange, RemediationResponse, EvaluationResult
+from remediation_api.models.remediation import CodeChange, RemediationResponse
 
 
 # ---- CodeChange ----
@@ -134,56 +134,3 @@ def test_remediation_with_full_code_change():
     assert rem.code_changes[0].description != ""
 
 
-# ---- EvaluationResult ----
-
-def test_evaluation_result_valid():
-    result = EvaluationResult(
-        completeness_score=0.9,
-        correctness_score=0.85,
-        security_score=1.0,
-        confidence_score=0.9,
-        is_false_positive=False,
-        is_approved=True,
-        feedback=[],
-    )
-    assert result.is_approved is True
-    assert result.confidence_score == 0.9
-
-
-def test_evaluation_result_score_above_1_rejected():
-    with pytest.raises(ValidationError):
-        EvaluationResult(
-            completeness_score=1.5,
-            correctness_score=0.8,
-            security_score=0.8,
-            confidence_score=0.8,
-            is_false_positive=False,
-            is_approved=True,
-            feedback=[],
-        )
-
-
-def test_evaluation_result_score_below_0_rejected():
-    with pytest.raises(ValidationError):
-        EvaluationResult(
-            completeness_score=-0.1,
-            correctness_score=0.8,
-            security_score=0.8,
-            confidence_score=0.8,
-            is_false_positive=False,
-            is_approved=False,
-            feedback=[],
-        )
-
-
-def test_evaluation_result_feedback_list():
-    result = EvaluationResult(
-        completeness_score=0.5,
-        correctness_score=0.5,
-        security_score=0.5,
-        confidence_score=0.5,
-        is_false_positive=False,
-        is_approved=False,
-        feedback=["Fix does not address root cause", "Missing null check"],
-    )
-    assert len(result.feedback) == 2

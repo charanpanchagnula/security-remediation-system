@@ -10,10 +10,7 @@ from ..services.queue import queue_service
 from ..services.results import result_service
 from ..models.scan import Vulnerability
 from ..models.remediation import RemediationResponse, CodeChange
-from .generator import generator_agent
-from .evaluator import evaluator_agent
 from .autonomous_agent import AutonomousRemediatorAgent
-from ..vector.store import get_vector_store
 from ..config import settings
 from ..logger import get_logger
 
@@ -21,7 +18,7 @@ logger = get_logger(__name__)
 
 class Orchestrator:
     def __init__(self):
-        self.vector_store = get_vector_store()
+        pass  # No vector store needed
         
     async def ingest_scan(self, repo_url: str, commit_sha: Optional[str] = None, scanner_types: List[str] = ["semgrep"]) -> Dict[str, Any]:
         """
@@ -270,234 +267,61 @@ class Orchestrator:
             logger.warning(f"Could not delete archive {archive_key}: {e}")
 
     async def remediate_vulnerability(self, scan_id: str, vuln_id: str) -> Optional[RemediationResponse]:
-        """
-        On-Demand Remediation: Triggers the Agentic Loop for a single finding.
-        
-        1. Fetches the scan result.
-        2. Identifies the target vulnerability.
-        3. Checks for existing remediations (idempotency).
-        4. Calls _process_vulnerability to generate/retrieve a fix.
-        5. Updates the persistent result.
-
-        Args:
-            scan_id (str): The scan ID.
-            vuln_id (str): The specific vulnerability ID to fix.
-
-        Returns:
-            Optional[RemediationResponse]: The generated or retrieved remediation.
-        """
         scan_data = result_service.get_scan(scan_id)
         if not scan_data:
             raise ValueError("Scan not found")
-            
+
         vulnerabilities = scan_data.get("vulnerabilities", [])
         target_vuln = next((v for v in vulnerabilities if v.get("id") == vuln_id), None)
-        
         if not target_vuln:
             raise ValueError("Vulnerability not found")
-            
-        # Check if already exists
+
         remediations = scan_data.get("remediations", [])
-        # If exists, return it (idempotent)
-        # Fix: Check against vulnerability_id (UUID), not rule_id
         existing = next((r for r in remediations if r.get("vulnerability_id") == target_vuln["id"]), None)
         if existing:
             return RemediationResponse(**existing)
-            
-        # Reconstruct Vulnerability Object
+
         vuln_obj = Vulnerability(**target_vuln)
-        
-        # Process (Pass git_ref for accurate links)
-        git_ref = scan_data.get("commit_sha") or scan_data.get("branch") or "main"
-        rem_response = await self._process_vulnerability(vuln_obj, scan_data["repo_url"], scan_id, git_ref)
-        
+        work_dir = scan_data.get("work_dir", "")
+        if not work_dir or not Path(work_dir).exists():
+            raise ValueError(f"Workspace not available for scan {scan_id} — re-run the scan to generate a workspace")
+
+        rem_response = await self._process_vulnerability_autonomous(vuln_obj, work_dir, scan_id)
+
         if rem_response:
-            # Save back to DB
             remediations.append(rem_response.model_dump())
             scan_data["remediations"] = remediations
             scan_data["summary"]["remediations_generated"] = len(remediations)
             result_service.save_scan_result(scan_id, scan_data)
-            
+
         return rem_response
         
     async def batch_remediate_scan(self, scan_id: str):
-        """
-        On-Demand Batch Remediation: Generates fixes for ALL vulnerabilities in a scan.
-        Skips vulnerabilities that already have a remediation.
-
-        Args:
-            scan_id (str): The scan ID to process.
-        """
         scan_data = result_service.get_scan(scan_id)
         if not scan_data:
             return
-            
+
+        work_dir = scan_data.get("work_dir", "")
+        if not work_dir or not Path(work_dir).exists():
+            logger.error(f"No workspace for {scan_id} — cannot batch remediate")
+            return
+
         vulnerabilities = scan_data.get("vulnerabilities", [])
-        
-        # Only process those that don't match an existing remediation
-        # Note: mapping is vuln.rule_id -> remediation.vulnerability_id (a bit mismatch in naming, but logic holds)
-        # Actually, let's just iterate and call _process
-        
-        current_rems = scan_data.get("remediations", [])
-        existing_vuln_ids = {r["vulnerability_id"] for r in current_rems}
+        existing_vuln_ids = {r["vulnerability_id"] for r in scan_data.get("remediations", [])}
 
-        logger.info(f"Batch remediation for {scan_id}: {len(vulnerabilities)} vulns")
-
-        # Iterate
-        new_rems = []
         for v_dict in vulnerabilities:
             if v_dict["id"] in existing_vuln_ids:
                 continue
-                
             vuln_obj = Vulnerability(**v_dict)
             try:
-                git_ref = scan_data.get("commit_sha") or scan_data.get("branch") or "main"
-                if settings.USE_LEGACY_SINGLE_SHOT:
-                    rem = await self._process_vulnerability(vuln_obj, scan_data["repo_url"], scan_id, git_ref)
-                else:
-                    work_dir = scan_data.get("work_dir") or scan_data.get("source_dir", "")
-                    if not work_dir or not Path(work_dir).exists():
-                        logger.warning(f"No work_dir available for {scan_id}, falling back to legacy")
-                        rem = await self._process_vulnerability(vuln_obj, scan_data["repo_url"], scan_id, git_ref)
-                    else:
-                        rem = await self._process_vulnerability_autonomous(vuln_obj, work_dir, scan_id)
+                rem = await self._process_vulnerability_autonomous(vuln_obj, work_dir, scan_id)
                 if rem:
-                    new_rems.append(rem.model_dump())
-                    # Optimization: Save periodically or at end? 
-                    # For safety, let's append as we go but save at end to reduce IO maybe? 
-                    # Or save every time for progress updates.
+                    scan_data["remediations"].append(rem.model_dump())
+                    scan_data["summary"]["remediations_generated"] = len(scan_data["remediations"])
+                    result_service.save_scan_result(scan_id, scan_data)
+                    logger.info(f"Remediated {len(scan_data['remediations'])}/{len(vulnerabilities)}: {vuln_obj.id}")
             except Exception as e:
                 logger.error(f"Failed to remediate {vuln_obj.id}: {e}")
-
-        # Update final
-        if new_rems:
-            scan_data["remediations"].extend(new_rems)
-            scan_data["summary"]["remediations_generated"] = len(scan_data["remediations"])
-            result_service.save_scan_result(scan_id, scan_data)
-
-    async def _process_vulnerability(self, vuln: Vulnerability, repo_url: str, scan_id: str, git_ref: str = "main") -> Optional[RemediationResponse]:
-        """
-        The Core Agentic Loop:
-        1. RAG: Searches Vector Store for similar past fixes.
-        2. Evaluate: If a hit is found, evaluates its applicability.
-        3. Generate: If no hit or rejected, uses LLM to generate a new fix.
-        4. Verify: Evaluates the generated fix.
-        5. Learn: Stores high-confidence fixes back into Vector Store.
-
-        Args:
-            vuln (Vulnerability): The vulnerability to fix.
-            repo_url (str): The repo URL (for context).
-            scan_id (str): The scan ID.
-            git_ref (str): Commit SHA or branch for permalinks.
-
-        Returns:
-            Optional[RemediationResponse]: The approved remediation, or None if failed.
-        """
-        # Construct GitHub Link
-        # Use provided git_ref (commit_sha or branch)
-        github_link = None
-        if "github.com" in repo_url:
-            clean_repo = repo_url.rstrip(".git").rstrip("/")
-            # Use the exact git_ref for permalinks
-            github_link = f"{clean_repo}/blob/{git_ref}/{vuln.file_path.lstrip('/')}#L{vuln.start_line}-L{vuln.end_line}"
-
-        # 1. Search Vector Store for relevant context
-        # Agno/LanceDB handles the embedding generation internally
-        query_text = f"{vuln.rule_id} {vuln.message}\n{vuln.code_snippet}"
-        
-        logger.info(f"🔍 [Vector Search] Searching for context. Rule: {vuln.rule_id}")
-        logger.debug(f"🔍 [Vector Search] Query: {query_text[:100]}...")
-
-        hits = await asyncio.to_thread(
-            self.vector_store.search, 
-            query_text, 
-            limit=1, 
-            filters={"scanner": vuln.scanner}
-        )
-        
-        reference_remediation = None
-        feedback = None
-        
-        if hits:
-            best_hit = hits[0] # List[Dict]
-            logger.info(f"✅ [Vector Search] Hit Found! Score: {best_hit['score']}")
-            logger.info(f"✅ [Vector Search] Cached Remediation ID: {best_hit.get('rule_id')}")
-            
-            try:
-                # Deserialize the stored JSON back to object
-                cached_rem_json = best_hit["remediation"]
-                existing_rem = RemediationResponse.model_validate_json(cached_rem_json)
-                
-                # Check Score (Using Agno/LanceDB score. NOTE: LanceDB is distance, Agno might invert it.
-                # For now, let's rely on success of retrieval implying relevance, but check Evaluator.)
-                
-                # Evaluate if the retrieved fix is completely valid for the current context
-
-                evaluation = await asyncio.to_thread(
-                    evaluator_agent.evaluate_fix, vuln, existing_rem
-                )
-                
-                logger.info(f"[Evaluator] Score: {evaluation.confidence_score} | Feedback: {evaluation.feedback}")
-
-                if evaluation.confidence_score >= settings.CONFIDENCE_THRESHOLD:
-                    logger.info(f"Vector guidance sufficient. Returning cached.")
-                    # CRITICAL: Overwrite ID to match current vulnerability UUID for UI mapping
-                    existing_rem.vulnerability_id = vuln.id
-                    return existing_rem
-                else:
-                    logger.info(f"Vector guidance insufficient. Proceeding to generation with context.")
-                    reference_remediation = existing_rem
-                    feedback = f"Previous similar fix was found but rejected for this specific context: {evaluation.feedback}"
-            except Exception as e:
-                logger.error(f"Failed to process vector hit: {e}")
-        
-        # 2. Generator Loop: Agentic Cycle of Generate -> Evaluate -> Refine
-        for attempt in range(settings.MAX_RETRIES + 1):
-            try:
-                # Generator (Run in thread)
-                remediation = await asyncio.to_thread(
-                    generator_agent.generate_fix, vuln, feedback, github_link, reference_remediation
-                )
-                
-                # Evaluator (Run in thread)
-                evaluation = await asyncio.to_thread(
-                    evaluator_agent.evaluate_fix, vuln, remediation
-                )
-                
-                logger.info(f"[Evaluator] Cycle {attempt+1}/{settings.MAX_RETRIES+1} | Score: {evaluation.confidence_score} | Feedback: {evaluation.feedback}")
-                
-                if evaluation.confidence_score >= settings.CONFIDENCE_THRESHOLD:
-                    # Success - Store result
-                    # Update remediation object with evaluator's confidence and FP judgment
-                    remediation.confidence_score = evaluation.confidence_score
-                    remediation.is_false_positive = evaluation.is_false_positive
-                    
-                    # Store new embedding for future
-                    await asyncio.to_thread(
-                        self.vector_store.store, 
-                        vuln.rule_id,
-                        remediation.model_dump_json(),
-                        vuln.code_snippet,
-                        scan_id,
-                        vuln.scanner
-                    )
-                    # CRITICAL: Overwrite ID to match current vulnerability UUID for UI mapping
-                    # (Generator might produce random/rule ID)
-                    remediation.vulnerability_id = vuln.id
-                    return remediation
-                
-                feedback = evaluation.feedback # Feedback loop
-                # Clear reference after first attempt to avoid biasing if it was totally wrong
-                reference_remediation = None 
-                
-                feedback = evaluation.feedback # Feedback loop
-                
-            except Exception as e:
-                logger.error(f"Error in remediation loop for {vuln.id}: {e}", exc_info=True)
-                # Log error
-                pass
-                
-        return None
 
     async def _process_vulnerability_autonomous(
         self,
@@ -524,15 +348,18 @@ class Orchestrator:
             "end_line": vuln.end_line,
         }
         try:
-            patch_dict, iteration_log = await asyncio.to_thread(
+            patch_dict, iteration_log, llm_messages = await asyncio.to_thread(
                 agent.remediate, vuln_dict, work_dir
             )
             code_changes = [
                 CodeChange(**c) for c in patch_dict.get("code_changes", [])
             ]
+            _severity_map = {"ERROR": "HIGH", "WARNING": "MEDIUM", "INFO": "LOW", "NOTE": "LOW"}
+            severity = vuln.severity if vuln.severity in ("LOW", "MEDIUM", "HIGH", "CRITICAL") \
+                else _severity_map.get(vuln.severity.upper(), "MEDIUM")
             return RemediationResponse(
                 vulnerability_id=vuln.id,
-                severity=vuln.severity,
+                severity=severity,
                 summary=patch_dict.get("summary", ""),
                 explanation=patch_dict.get("summary", ""),
                 code_changes=code_changes,
@@ -541,6 +368,7 @@ class Orchestrator:
                 is_false_positive=patch_dict.get("is_false_positive", False),
                 confidence_score=patch_dict.get("confidence_score", 0.0),
                 iteration_log=iteration_log,
+                llm_messages=llm_messages,
             )
         except Exception as e:
             logger.error(f"Autonomous remediation failed for {vuln.id}: {e}", exc_info=True)
