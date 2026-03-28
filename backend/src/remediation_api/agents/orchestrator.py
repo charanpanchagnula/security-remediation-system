@@ -8,9 +8,10 @@ from ..services.github import github_service
 from ..services.queue import queue_service
 from ..services.results import result_service
 from ..models.scan import Vulnerability
-from ..models.remediation import RemediationResponse
+from ..models.remediation import RemediationResponse, CodeChange
 from .generator import generator_agent
 from .evaluator import evaluator_agent
+from .autonomous_agent import AutonomousRemediatorAgent
 from ..vector.store import get_vector_store
 from ..config import settings
 from ..logger import get_logger
@@ -237,6 +238,7 @@ class Orchestrator:
             "vulnerabilities": [v.model_dump() for v in all_vulnerabilities],
             "remediations": [],
             "scanner_types": scanner_types,
+            "work_dir": str(extract_dir),
             "summary": {
                 "total_vulnerabilities": len(all_vulnerabilities),
                 "remediations_generated": 0,
@@ -337,7 +339,15 @@ class Orchestrator:
             vuln_obj = Vulnerability(**v_dict)
             try:
                 git_ref = scan_data.get("commit_sha") or scan_data.get("branch") or "main"
-                rem = await self._process_vulnerability(vuln_obj, scan_data["repo_url"], scan_id, git_ref)
+                if settings.USE_LEGACY_SINGLE_SHOT:
+                    rem = await self._process_vulnerability(vuln_obj, scan_data["repo_url"], scan_id, git_ref)
+                else:
+                    work_dir = scan_data.get("work_dir") or scan_data.get("source_dir", "")
+                    if not work_dir:
+                        logger.warning(f"No work_dir in scan_data for {scan_id}, falling back to legacy")
+                        rem = await self._process_vulnerability(vuln_obj, scan_data["repo_url"], scan_id, git_ref)
+                    else:
+                        rem = await self._process_vulnerability_autonomous(vuln_obj, work_dir, scan_id)
                 if rem:
                     new_rems.append(rem.model_dump())
                     # Optimization: Save periodically or at end? 
@@ -475,5 +485,52 @@ class Orchestrator:
                 pass
                 
         return None
+
+    async def _process_vulnerability_autonomous(
+        self,
+        vuln: Vulnerability,
+        work_dir: str,
+        scan_id: str,
+    ) -> Optional[RemediationResponse]:
+        """
+        Multi-turn autonomous remediation using AutonomousRemediatorAgent.
+        Reads source files via tools, applies patches to sandbox, validates
+        (syntax + security rescan), and refines iteratively.
+        """
+        agent = AutonomousRemediatorAgent(
+            model_id=getattr(settings, "REMEDIATION_MODEL", "deepseek-chat"),
+            max_iterations=getattr(settings, "MAX_ITERATIONS", 6),
+        )
+        vuln_dict = {
+            "scanner": vuln.scanner,
+            "rule_id": vuln.rule_id,
+            "severity": vuln.severity,
+            "message": vuln.message,
+            "file_path": vuln.file_path,
+            "start_line": vuln.start_line,
+            "end_line": vuln.end_line,
+        }
+        try:
+            patch_dict, iteration_log = await asyncio.to_thread(
+                agent.remediate, vuln_dict, work_dir
+            )
+            code_changes = [
+                CodeChange(**c) for c in patch_dict.get("code_changes", [])
+            ]
+            return RemediationResponse(
+                vulnerability_id=vuln.id,
+                severity=vuln.severity,
+                summary=patch_dict.get("summary", ""),
+                explanation=patch_dict.get("summary", ""),
+                code_changes=code_changes,
+                security_implications=patch_dict.get("security_implications", []),
+                evaluation_concerns=patch_dict.get("evaluation_concerns", []),
+                is_false_positive=patch_dict.get("is_false_positive", False),
+                confidence_score=patch_dict.get("confidence_score", 0.0),
+                iteration_log=iteration_log,
+            )
+        except Exception as e:
+            logger.error(f"Autonomous remediation failed for {vuln.id}: {e}", exc_info=True)
+            return None
 
 orchestrator = Orchestrator()
