@@ -49,6 +49,7 @@ class _IterationState:
         })
         self._actions = []
         self._validation = {}
+        self._last_patch = None
 
 
 class RemediationToolkit(Toolkit):
@@ -123,7 +124,6 @@ class RemediationToolkit(Toolkit):
             if original_code not in content:
                 return f"ERROR: original_code not found verbatim in {file_path}. Check indentation/whitespace."
             target.write_text(content.replace(original_code, new_code, 1), encoding="utf-8")
-            self.state.record_validation({"last_patch_file": file_path})
             return f"OK: patch applied to {file_path} in sandbox"
         except Exception as e:
             return f"ERROR: {e}"
