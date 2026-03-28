@@ -72,6 +72,16 @@ async def list_tools() -> list[Tool]:
                         "default": False,
                         "description": "Use server-side AI engine instead of local Claude Agent SDK. Local Claude requires Claude Code as the host process — the server auto-detects and falls back to backend if unavailable, but set this to true explicitly when running from non-Claude Code environments (Antigravity, Cursor, Windsurf, etc.).",
                     },
+                    "use_multi_turn": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Use iterative multi-turn agent loop (requires Claude Code as host). More thorough but slower.",
+                    },
+                    "max_iterations": {
+                        "type": "integer",
+                        "default": 6,
+                        "description": "Max refinement iterations per vulnerability (multi-turn only).",
+                    },
                 },
                 "required": ["path", "project_name"],
             },
@@ -179,6 +189,16 @@ async def list_tools() -> list[Tool]:
                         "default": False,
                         "description": "Use server-side AI engine instead of local Claude Agent SDK. Local Claude requires Claude Code as the host process — the server auto-detects and falls back to backend if unavailable, but set this to true explicitly when running from non-Claude Code environments (Antigravity, Cursor, Windsurf, etc.).",
                     },
+                    "use_multi_turn": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Use iterative multi-turn agent loop (requires Claude Code as host). More thorough but slower.",
+                    },
+                    "max_iterations": {
+                        "type": "integer",
+                        "default": 6,
+                        "description": "Max refinement iterations per vulnerability (multi-turn only).",
+                    },
                 },
                 "required": ["scan_id", "repo_path"],
             },
@@ -276,6 +296,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             API_URL,
         )
 
+        use_multi_turn = arguments.get("use_multi_turn", False)
+        max_iterations = arguments.get("max_iterations", 6)
         result = await asyncio.to_thread(
             _run_remediate_all_loop,
             client,
@@ -283,6 +305,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             target,
             arguments.get("severity"),
             not arguments.get("use_backend_engine", False),
+            use_multi_turn,
+            max_iterations,
             True,  # quiet — no console output on stdio wire
             scanners,
         )
@@ -346,6 +370,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         _remed_scan_id = arguments["scan_id"]
         _history = load_history()
         _entry = next((e for e in _history if e["scan_id"] == _remed_scan_id), {})
+        use_multi_turn = arguments.get("use_multi_turn", False)
+        max_iterations = arguments.get("max_iterations", 6)
         result = await asyncio.to_thread(
             _run_remediate_all_loop,
             client,
@@ -353,6 +379,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             Path(arguments["repo_path"]),
             arguments.get("severity"),
             not arguments.get("use_backend_engine", False),
+            use_multi_turn,
+            max_iterations,
             True,  # quiet
             _entry.get("scanners"),
         )
