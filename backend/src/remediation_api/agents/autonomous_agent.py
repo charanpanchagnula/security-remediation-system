@@ -29,9 +29,18 @@ class _IterationState:
         self._actions: list[str] = []
         self._validation: dict = {}
         self._last_patch: Optional[dict] = None
+        self._tool_calls: list[dict] = []
 
     def record_action(self, action: str):
         self._actions.append(action)
+
+    def log_tool_call(self, tool: str, input_args: dict, output: str):
+        """Record full tool call I/O for the current iteration (output capped at 2000 chars)."""
+        self._tool_calls.append({
+            "tool": tool,
+            "input": input_args,
+            "output": output[:2000] if len(output) > 2000 else output,
+        })
 
     def record_validation(self, results: dict, patch: Optional[dict] = None):
         self._validation.update(results)
@@ -46,10 +55,12 @@ class _IterationState:
             "patch_proposed": self._last_patch,
             "validation_results": dict(self._validation),
             "reasoning": reasoning,
+            "tool_calls": list(self._tool_calls),
         })
         self._actions = []
         self._validation = {}
         self._last_patch = None
+        self._tool_calls = []
 
 
 class RemediationToolkit(Toolkit):
@@ -82,11 +93,13 @@ class RemediationToolkit(Toolkit):
         """Read a source file from the working directory. path is relative to work_dir."""
         self.state.record_action(f"read_file({path})")
         try:
-            return (self.work_dir / path).read_text(encoding="utf-8", errors="replace")
+            result = (self.work_dir / path).read_text(encoding="utf-8", errors="replace")
         except FileNotFoundError:
-            return f"ERROR: file not found: {path}"
+            result = f"ERROR: file not found: {path}"
         except Exception as e:
-            return f"ERROR: {e}"
+            result = f"ERROR: {e}"
+        self.state.log_tool_call("read_file", {"path": path}, result)
+        return result
 
     def search_code(self, query: str, path: str = ".") -> str:
         """Search for a code pattern using ripgrep. Returns matching lines with file:line context."""
@@ -109,16 +122,20 @@ class RemediationToolkit(Toolkit):
                     lines.append(f"{d['path']['text']}:{d['line_number']}: {d['lines']['text'].rstrip()}")
             except Exception:
                 pass
-        return "\n".join(lines) if lines else "(no matches)"
+        result_str = "\n".join(lines) if lines else "(no matches)"
+        self.state.log_tool_call("search_code", {"query": query, "path": path}, result_str)
+        return result_str
 
     def list_files(self, pattern: str = "**/*") -> str:
         """List files in the working directory matching a glob pattern."""
         self.state.record_action(f"list_files({pattern})")
         try:
             files = sorted(str(p.relative_to(self.work_dir)) for p in self.work_dir.glob(pattern) if p.is_file())
-            return "\n".join(files[:200]) or "(no files matched)"
+            result = "\n".join(files[:200]) or "(no files matched)"
         except Exception as e:
-            return f"ERROR: {e}"
+            result = f"ERROR: {e}"
+        self.state.log_tool_call("list_files", {"pattern": pattern}, result)
+        return result
 
     def apply_patch(self, file_path: str, original_code: str, new_code: str) -> str:
         """Apply a code change to the sandbox copy of file_path. Never touches work_dir."""
@@ -128,14 +145,18 @@ class RemediationToolkit(Toolkit):
             return f"ERROR: file_path escapes sandbox: {file_path}"
         try:
             if not target.exists():
-                return f"ERROR: file not found in sandbox: {file_path}"
-            content = target.read_text(encoding="utf-8", errors="replace")
-            if original_code not in content:
-                return f"ERROR: original_code not found verbatim in {file_path}. Check indentation/whitespace."
-            target.write_text(content.replace(original_code, new_code, 1), encoding="utf-8")
-            return f"OK: patch applied to {file_path} in sandbox"
+                result = f"ERROR: file not found in sandbox: {file_path}"
+            else:
+                content = target.read_text(encoding="utf-8", errors="replace")
+                if original_code not in content:
+                    result = f"ERROR: original_code not found verbatim in {file_path}. Check indentation/whitespace."
+                else:
+                    target.write_text(content.replace(original_code, new_code, 1), encoding="utf-8")
+                    result = f"OK: patch applied to {file_path} in sandbox"
         except Exception as e:
-            return f"ERROR: {e}"
+            result = f"ERROR: {e}"
+        self.state.log_tool_call("apply_patch", {"file_path": file_path, "original_code": original_code, "new_code": new_code}, result)
+        return result
 
     def validate_and_scan(self, file_path: str) -> str:
         """Run syntax check + security rescan on the sandboxed file. Returns JSON result dict."""
@@ -169,8 +190,10 @@ class RemediationToolkit(Toolkit):
         results["security_scan"] = self._rescan(target, file_path)
 
         self.state.record_validation(results)
+        result_str = json.dumps(results)
+        self.state.log_tool_call("validate_and_scan", {"file_path": file_path}, result_str)
         self.state.commit()
-        return json.dumps(results)
+        return result_str
 
     def rollback(self) -> str:
         """Reset the sandbox to a clean copy of work_dir."""
@@ -178,9 +201,11 @@ class RemediationToolkit(Toolkit):
         try:
             shutil.rmtree(str(self.sandbox_dir))
             shutil.copytree(str(self.work_dir), str(self.sandbox_dir), dirs_exist_ok=True)
-            return "OK: sandbox reset to original"
+            result = "OK: sandbox reset to original"
         except Exception as e:
-            return f"ERROR: {e}"
+            result = f"ERROR: {e}"
+        self.state.log_tool_call("rollback", {}, result)
+        return result
 
     def cleanup(self):
         """Remove sandbox directory. Call after agent is done."""

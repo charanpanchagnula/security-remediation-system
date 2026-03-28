@@ -201,3 +201,43 @@ def test_prompt_contains_vuln_fields(work_dir):
     assert "python.sql-injection" in prompt
     assert "app/db.py" in prompt
     assert work_dir in prompt
+
+
+# --- _IterationState.log_tool_call ---
+
+def test_iteration_state_log_tool_call():
+    s = _IterationState()
+    s.log_tool_call("read_file", {"path": "foo.py"}, "content here")
+    s.commit()
+    assert s.entries[0]["tool_calls"][0] == {
+        "tool": "read_file",
+        "input": {"path": "foo.py"},
+        "output": "content here",
+    }
+
+def test_iteration_state_log_tool_call_truncates():
+    s = _IterationState()
+    s.log_tool_call("read_file", {"path": "big.py"}, "x" * 3000)
+    s.commit()
+    assert len(s.entries[0]["tool_calls"][0]["output"]) == 2000
+
+def test_iteration_state_tool_calls_cleared_between_commits():
+    s = _IterationState()
+    s.log_tool_call("read_file", {"path": "a.py"}, "a")
+    s.commit()
+    s.log_tool_call("read_file", {"path": "b.py"}, "b")
+    s.commit()
+    assert len(s.entries[0]["tool_calls"]) == 1
+    assert len(s.entries[1]["tool_calls"]) == 1
+
+def test_toolkit_read_file_logs_tool_call(work_dir):
+    s = _IterationState()
+    tk = RemediationToolkit(work_dir=work_dir, scanner="semgrep", state=s)
+    try:
+        tk.read_file("app/db.py")
+        s.commit()
+        assert s.entries[0]["tool_calls"][0]["tool"] == "read_file"
+        assert s.entries[0]["tool_calls"][0]["input"] == {"path": "app/db.py"}
+        assert "old = 1" in s.entries[0]["tool_calls"][0]["output"]
+    finally:
+        tk.cleanup()
