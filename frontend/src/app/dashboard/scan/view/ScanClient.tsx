@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { scanApi, ScanDetail, Vulnerability } from "@/services/api";
 import Link from "next/link";
 import ReactMarkdown from 'react-markdown';
-import { ArrowLeft, CheckCircle, FileText, ExternalLink, Shield, Loader2, Wand2 } from "lucide-react";
+import { ArrowLeft, CheckCircle, FileText, ExternalLink, Shield } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 
 export default function ScanClient() {
@@ -14,7 +14,6 @@ export default function ScanClient() {
     const [loading, setLoading] = useState(true);
     const [selectedVuln, setSelectedVuln] = useState<Vulnerability | null>(null);
     const [generating, setGenerating] = useState<Set<string>>(new Set()); // IDs of vulns being remediated
-    const [batchGenerating, setBatchGenerating] = useState(false);
     const [selectedDetailScanner, setSelectedDetailScanner] = useState("All");
 
     useEffect(() => {
@@ -68,21 +67,6 @@ export default function ScanClient() {
     }
 
     const remediation = selectedVuln ? scan.remediations?.find(r => r.vulnerability_id === selectedVuln.id) : null;
-
-    const handleBatchRemediate = async () => {
-        if (!confirm("This will trigger AI remediation for all vulnerabilities. Continue?")) return;
-        setBatchGenerating(true);
-        try {
-            if (!scan) return;
-            await scanApi.generateBatchRemediation(scan.scan_id);
-            alert("Batch remediation started in background. Refresh explicitly to see progress.");
-        } catch (e) {
-            console.error(e);
-            alert("Failed to start batch remediation");
-        } finally {
-            setBatchGenerating(false);
-        }
-    };
 
     const getSeverityWeight = (severity: string) => {
         const map: Record<string, number> = {
@@ -139,25 +123,6 @@ export default function ScanClient() {
                             <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Scan Results</h1>
                             <p className="text-sm text-gray-500">{scan.repo_url} (ID: {scan.scan_id.slice(0, 8)})</p>
                         </div>
-                    </div>
-                    <div className="flex space-x-3">
-                        <button
-                            onClick={handleBatchRemediate}
-                            disabled={batchGenerating}
-                            className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none disabled:opacity-50"
-                        >
-                            {batchGenerating ? (
-                                <>
-                                    <Loader2 className="animate-spin -ml-1 mr-2 h-4 w-4" />
-                                    Generating All Fixes...
-                                </>
-                            ) : (
-                                <>
-                                    <Wand2 className="-ml-1 mr-2 h-4 w-4" />
-                                    Generate Fix recommendation for all vulnerabilities
-                                </>
-                            )}
-                        </button>
                     </div>
                 </div>
 

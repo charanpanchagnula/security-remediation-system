@@ -104,7 +104,4 @@ export const scanApi = {
     return response.data;
   },
 
-  async generateBatchRemediation(scanId: string): Promise<void> {
-    await axios.post(`${API_URL}/scan/${scanId}/remediate-all`);
-  }
 };
