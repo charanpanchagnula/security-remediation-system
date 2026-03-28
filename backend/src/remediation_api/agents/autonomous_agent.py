@@ -59,7 +59,11 @@ class RemediationToolkit(Toolkit):
         super().__init__(name="remediation_tools")
         self.work_dir = Path(work_dir).resolve()
         self.sandbox_dir = Path(tempfile.mkdtemp(prefix="sandbox_"))
-        shutil.copytree(str(self.work_dir), str(self.sandbox_dir), dirs_exist_ok=True)
+        try:
+            shutil.copytree(str(self.work_dir), str(self.sandbox_dir), dirs_exist_ok=True)
+        except Exception:
+            shutil.rmtree(str(self.sandbox_dir), ignore_errors=True)
+            raise
         self.scanner = scanner
         self.state = state
         for fn in (
@@ -87,8 +91,11 @@ class RemediationToolkit(Toolkit):
     def search_code(self, query: str, path: str = ".") -> str:
         """Search for a code pattern using ripgrep. Returns matching lines with file:line context."""
         self.state.record_action(f"search_code({query!r})")
+        search_path = (self.work_dir / path).resolve()
+        if not str(search_path).startswith(str(self.work_dir.resolve())):
+            return "ERROR: path escapes working directory"
         result = subprocess.run(
-            ["rg", "--json", "-n", query, str(self.work_dir / path)],
+            ["rg", "--json", "-n", query, str(search_path)],
             capture_output=True, text=True, timeout=15
         )
         if result.returncode not in (0, 1):  # 1 = no matches (not an error)
@@ -116,7 +123,9 @@ class RemediationToolkit(Toolkit):
     def apply_patch(self, file_path: str, original_code: str, new_code: str) -> str:
         """Apply a code change to the sandbox copy of file_path. Never touches work_dir."""
         self.state.record_action(f"apply_patch({file_path})")
-        target = self.sandbox_dir / file_path
+        target = (self.sandbox_dir / file_path).resolve()
+        if not str(target).startswith(str(self.sandbox_dir.resolve())):
+            return f"ERROR: file_path escapes sandbox: {file_path}"
         try:
             if not target.exists():
                 return f"ERROR: file not found in sandbox: {file_path}"
@@ -189,6 +198,8 @@ class RemediationToolkit(Toolkit):
                     ["semgrep", "scan", "--json", "--config=auto", str(target)],
                     capture_output=True, text=True, timeout=60
                 )
+                if not r.stdout.strip() and r.returncode not in (0, 1):
+                    return f"WARN: semgrep exited {r.returncode} with no output — result unreliable"
                 data = json.loads(r.stdout) if r.stdout.strip() else {}
                 findings = data.get("results", [])
                 if not findings:
@@ -200,6 +211,8 @@ class RemediationToolkit(Toolkit):
                     ["checkov", "-f", str(target), "--output", "json", "--quiet"],
                     capture_output=True, text=True, timeout=60
                 )
+                if not r.stdout.strip() and r.returncode not in (0, 1):
+                    return f"WARN: checkov exited {r.returncode} with no output — result unreliable"
                 data = json.loads(r.stdout) if r.stdout.strip() else {}
                 failed = (data.get("summary", {}) or {}).get("failed", 0)
                 return "PASS" if failed == 0 else f"FAIL ({failed} checks failed)"
@@ -208,6 +221,8 @@ class RemediationToolkit(Toolkit):
                     ["trivy", "fs", "--format", "json", "--quiet", str(target)],
                     capture_output=True, text=True, timeout=60
                 )
+                if not r.stdout.strip() and r.returncode not in (0, 1):
+                    return f"WARN: trivy exited {r.returncode} with no output — result unreliable"
                 data = json.loads(r.stdout) if r.stdout.strip() else {}
                 vulns = sum(len(res.get("Vulnerabilities") or []) for res in data.get("Results", []))
                 return "PASS" if vulns == 0 else f"FAIL ({vulns} vulnerabilities found)"
