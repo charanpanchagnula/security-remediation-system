@@ -3,7 +3,7 @@ MultiTurnRemediator: iterative multi-turn patch generation via Claude Agent SDK.
 
 Unlike LocalClaudeRemediator (single-shot, no tools), this agent runs a SINGLE
 multi-turn conversation where Claude uses tools to:
-  1. Read source files (Read/Grep/Glob tools)
+  1. Read source files (Read/Write/Edit/Grep/Glob tools)
   2. Generate a patch
   3. Apply the patch in a temp sandbox and run validation (Bash tool)
   4. Refine the patch if validation fails
@@ -27,7 +27,7 @@ except ImportError:
 @dataclass
 class IterationEntry:
     iteration: int
-    actions: list
+    actions: list[str]
     patch_proposed: Optional[dict]
     validation_results: dict
     reasoning: str
@@ -101,7 +101,7 @@ class MultiTurnRemediator:
         self.model = model
         self.max_iterations = max_iterations
 
-    def remediate(self, vulnerability: dict, work_dir: str) -> tuple:
+    def remediate(self, vulnerability: dict, work_dir: str) -> tuple[dict, list]:
         """
         Run one multi-turn conversation where Claude uses tools to generate and
         validate a patch iteratively. Returns (patch_dict, iteration_log).
@@ -122,9 +122,9 @@ class MultiTurnRemediator:
             prompt=self._build_prompt(vulnerability, work_dir),
             options=ClaudeAgentOptions(
                 model=self.model,
-                system_prompt=self._build_system_prompt(),
+                system_prompt=SYSTEM_PROMPT,
                 allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
-                max_turns=self.max_iterations * 10,
+                max_turns=self.max_iterations * 10,  # ~10 SDK turns per cycle: read, analyze, bash, validate
             ),
         ):
             if isinstance(message, ResultMessage):
@@ -135,10 +135,9 @@ class MultiTurnRemediator:
 
         patch = self._parse_json(result_text)
         log = patch.pop("iteration_log", [])
+        if not isinstance(log, list):
+            log = []
         return patch, log
-
-    def _build_system_prompt(self) -> str:
-        return SYSTEM_PROMPT
 
     def _build_prompt(self, vuln: dict, work_dir: str) -> str:
         scanner = vuln.get("scanner", "")
