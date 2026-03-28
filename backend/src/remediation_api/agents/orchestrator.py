@@ -359,7 +359,7 @@ class Orchestrator:
             ]
             severity = vuln.severity if vuln.severity in ("LOW", "MEDIUM", "HIGH", "CRITICAL") \
                 else _SEMGREP_SEVERITY_MAP.get(vuln.severity.upper(), "MEDIUM")
-            return RemediationResponse(
+            rem_response = RemediationResponse(
                 vulnerability_id=vuln.id,
                 severity=severity,
                 summary=patch_dict.get("summary", ""),
@@ -372,6 +372,12 @@ class Orchestrator:
                 iteration_log=iteration_log,
                 llm_messages=llm_messages,
             )
+            # Save human-readable conversation log
+            try:
+                result_service.save_conversation_log(scan_id, vuln.id, llm_messages)
+            except Exception as e:
+                logger.warning(f"Failed to save conversation log for {vuln.id}: {e}")
+            return rem_response
         except Exception as e:
             logger.error(f"Autonomous remediation failed for {vuln.id}: {e}", exc_info=True)
             return None

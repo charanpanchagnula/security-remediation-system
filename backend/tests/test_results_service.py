@@ -77,6 +77,28 @@ def test_delete_scan_removes_result_json(tmp_path):
     assert svc.get_scan("scan-del") is None
 
 
+def test_save_conversation_log_creates_file(tmp_path, monkeypatch):
+    from remediation_api import config as cfg
+    monkeypatch.setattr(cfg.settings, "WORK_DIR", str(tmp_path))
+    from remediation_api.services import results as results_module
+    # Re-instantiate so it picks up patched settings
+    from remediation_api.services.results import ResultService
+    svc = ResultService()
+    messages = [
+        {"role": "system", "content": "You are an agent."},
+        {"role": "user", "content": "Fix this vuln."},
+        {"role": "assistant", "content": '{"summary": "fixed"}'},
+        {"role": "assistant", "tool_calls": [{"tool": "read_file", "input": {"path": "app.py"}, "output": "print('hi')"}]},
+    ]
+    path = svc.save_conversation_log("scan-1", "vuln-1", messages)
+    assert path.exists()
+    text = path.read_text()
+    assert "[1] SYSTEM" in text
+    assert "[2] USER" in text
+    assert "[3] ASSISTANT" in text
+    assert "[call] read_file" in text
+
+
 def test_save_preserves_all_fields(tmp_path):
     svc = _make_service(tmp_path)
     data = {

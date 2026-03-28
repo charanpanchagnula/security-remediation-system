@@ -2,6 +2,7 @@ import json
 import tempfile
 import uuid
 import os
+from pathlib import Path
 from .storage import get_storage, S3StorageService, LocalStorageService
 from ..config import settings
 from ..logger import get_logger
@@ -154,5 +155,29 @@ class ResultService:
         key = f"scans/{scan_id}.json"
         self.storage.delete_file(key)
         logger.info(f"Deleted scan result: {key}")
+
+    def save_conversation_log(self, scan_id: str, vuln_id: str, messages: list) -> Path:
+        """Save a human-readable LLM conversation log for a single vulnerability."""
+        conv_dir = Path(settings.WORK_DIR) / "conversations" / scan_id
+        conv_dir.mkdir(parents=True, exist_ok=True)
+        log_path = conv_dir / f"{vuln_id}.txt"
+        lines = [f"LLM Conversation Log — scan={scan_id} vuln={vuln_id}\n", "=" * 72 + "\n\n"]
+        for i, msg in enumerate(messages, 1):
+            role = msg.get("role", "unknown").upper()
+            lines.append(f"[{i}] {role}\n")
+            if msg.get("content"):
+                lines.append(f"    {msg['content']}\n")
+            for tc in msg.get("tool_calls", []):
+                in_str = json.dumps(tc.get("input", {}), indent=6)
+                out_str = tc.get("output", "")[:2000]
+                lines.append(f"    [call] {tc['tool']}(\n")
+                lines.append(f"             in:  {in_str}\n")
+                lines.append(f"             out: {out_str}\n")
+                lines.append(f"           )\n")
+            lines.append("\n")
+        log_path.write_text("".join(lines), encoding="utf-8")
+        logger.info(f"Conversation log saved to {log_path}")
+        return log_path
+
 
 result_service = ResultService()
