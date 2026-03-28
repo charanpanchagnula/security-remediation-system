@@ -46,7 +46,7 @@ async def list_tools() -> list[Tool]:
                 "After revalidation, writes REPORT-CRITICAL.md and REPORT-HIGH.md to "
                 ".security-scan/patches/<scan_id>/ and saves full vulnerability details to "
                 ".security-scan/sessions/<scan_id>.json. "
-                "Patch generation uses local Claude by default; pass use_backend_engine=true to use the server. "
+                "Patch generation uses the backend autonomous agent by default; pass use_local=true (CLI --local flag) to use local Claude Agent SDK. "
                 "Long-running blocking call. Returns scan_id, revalidation_scan_id, summary, and dry_run_patches."
             ),
             inputSchema={
@@ -67,20 +67,10 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Comma-separated severities to include, e.g. 'CRITICAL,HIGH'. Omit for all.",
                     },
-                    "use_backend_engine": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Use server-side AI engine instead of local Claude Agent SDK. Local Claude requires Claude Code as the host process — the server auto-detects and falls back to backend if unavailable, but set this to true explicitly when running from non-Claude Code environments (Antigravity, Cursor, Windsurf, etc.).",
-                    },
-                    "use_multi_turn": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Use iterative multi-turn agent loop (requires Claude Code as host). More thorough but slower.",
-                    },
                     "max_iterations": {
                         "type": "integer",
                         "default": 6,
-                        "description": "Max refinement iterations per vulnerability (multi-turn only).",
+                        "description": "Max refinement iterations per vulnerability (local --local mode only).",
                     },
                 },
                 "required": ["path", "project_name"],
@@ -143,64 +133,6 @@ async def list_tools() -> list[Tool]:
                     "vuln_id": {"type": "string"},
                 },
                 "required": ["scan_id", "vuln_id"],
-            },
-        ),
-        Tool(
-            name="request_remediation",
-            description=(
-                "Trigger server-side AI remediation for a single vulnerability. "
-                "Returns immediately; call get_scan_results to check when the remediation is ready."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "scan_id": {"type": "string"},
-                    "vuln_id": {"type": "string"},
-                },
-                "required": ["scan_id", "vuln_id"],
-            },
-        ),
-        Tool(
-            name="remediate_all",
-            description=(
-                "Generate patches for all vulnerabilities in a completed scan, then run a single "
-                "batch revalidation: all patches applied at once → patched tar → one revalidation scan. "
-                "Lock files are skipped automatically. False positives are excluded from revalidation. "
-                "After revalidation, writes REPORT-CRITICAL.md and REPORT-HIGH.md to "
-                ".security-scan/patches/<scan_id>/ and updates .security-scan/sessions/<scan_id>.json "
-                "with full vulnerability details. "
-                "Uses local Claude by default; pass use_backend_engine=true for server-side generation. "
-                "Long-running. Returns passed/failed/skipped counts, revalidation_scan_id, and dry_run_patches."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "scan_id": {"type": "string"},
-                    "repo_path": {
-                        "type": "string",
-                        "description": "Absolute path to the scanned repository root",
-                    },
-                    "severity": {
-                        "type": "string",
-                        "description": "Comma-separated severities to include, e.g. 'CRITICAL,HIGH'. Omit for all.",
-                    },
-                    "use_backend_engine": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Use server-side AI engine instead of local Claude Agent SDK. Local Claude requires Claude Code as the host process — the server auto-detects and falls back to backend if unavailable, but set this to true explicitly when running from non-Claude Code environments (Antigravity, Cursor, Windsurf, etc.).",
-                    },
-                    "use_multi_turn": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Use iterative multi-turn agent loop (requires Claude Code as host). More thorough but slower.",
-                    },
-                    "max_iterations": {
-                        "type": "integer",
-                        "default": 6,
-                        "description": "Max refinement iterations per vulnerability (multi-turn only).",
-                    },
-                },
-                "required": ["scan_id", "repo_path"],
             },
         ),
         Tool(
@@ -296,7 +228,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             API_URL,
         )
 
-        use_multi_turn = arguments.get("use_multi_turn", False)
         max_iterations = arguments.get("max_iterations", 6)
         result = await asyncio.to_thread(
             _run_remediate_all_loop,
@@ -304,8 +235,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             scan_id,
             target,
             arguments.get("severity"),
-            not arguments.get("use_backend_engine", False),
-            use_multi_turn,
+            False,  # use_local — always use backend autonomous agent via MCP
             max_iterations,
             True,  # quiet — no console output on stdio wire
             scanners,
@@ -359,41 +289,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             client.get_vulnerability, arguments["scan_id"], arguments["vuln_id"]
         )
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
-
-    elif name == "request_remediation":
-        result = await asyncio.to_thread(
-            client.request_remediation, arguments["scan_id"], arguments["vuln_id"]
-        )
-        return [TextContent(type="text", text=json.dumps(result, indent=2))]
-
-    elif name == "remediate_all":
-        _remed_scan_id = arguments["scan_id"]
-        _history = load_history()
-        _entry = next((e for e in _history if e["scan_id"] == _remed_scan_id), {})
-        use_multi_turn = arguments.get("use_multi_turn", False)
-        max_iterations = arguments.get("max_iterations", 6)
-        result = await asyncio.to_thread(
-            _run_remediate_all_loop,
-            client,
-            _remed_scan_id,
-            Path(arguments["repo_path"]),
-            arguments.get("severity"),
-            not arguments.get("use_backend_engine", False),
-            use_multi_turn,
-            max_iterations,
-            True,  # quiet
-            _entry.get("scanners"),
-        )
-        return [TextContent(type="text", text=json.dumps({
-            "scan_id": arguments["scan_id"],
-            "passed": result["passed"],
-            "failed": result["failed"],
-            "skipped": result["skipped"],
-            "total_vulns": result["total_vulns"],
-            "patches_dir": result["patches_dir"],
-            "revalidation_scan_id": result.get("revalidation_scan_id"),
-            "dry_run_patches": result.get("dry_run_patches", []),
-        }, indent=2))]
 
     elif name == "apply_remediation":
         scan_id = arguments["scan_id"]

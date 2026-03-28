@@ -619,8 +619,7 @@ def _run_remediate_all_loop(
     scan_id: str,
     target: Path,
     severity: Optional[str] = None,
-    use_local_claude: bool = True,
-    use_multi_turn: bool = False,
+    use_local: bool = False,
     max_iterations: int = 6,
     quiet: bool = False,
     scanners: list | None = None,
@@ -688,26 +687,14 @@ def _run_remediate_all_loop(
     if not quiet:
         console.print(f"\n[bold]Phase 1 of 2 — Generating patches for {len(vulns)} findings[/bold]")
 
-    remediator = None
-    if use_local_claude:
-        from .agent import LocalClaudeRemediator, CLAUDE_SDK_AVAILABLE
-        if CLAUDE_SDK_AVAILABLE:
-            if not quiet:
-                console.print("[dim]Using local Claude (Agent SDK)[/dim]")
-            remediator = LocalClaudeRemediator()
-        else:
-            if not quiet:
-                rprint("[yellow]claude_agent_sdk unavailable (not running inside Claude Code) — falling back to backend engine[/yellow]")
-            use_local_claude = False
-    if not use_local_claude and not quiet:
-        console.print("[dim]Using backend remediation engine[/dim]")
-
-    if use_multi_turn:
+    if use_local:
         from .multi_turn_agent import MultiTurnRemediator, CLAUDE_SDK_AVAILABLE as MT_AVAILABLE
         if not MT_AVAILABLE:
             if not quiet:
-                rprint("[yellow]claude_agent_sdk unavailable — falling back to single-shot[/yellow]")
-            use_multi_turn = False
+                rprint("[yellow]claude_agent_sdk unavailable — falling back to backend autonomous agent[/yellow]")
+            use_local = False
+    if not use_local and not quiet:
+        console.print("[dim]Using backend autonomous remediation agent[/dim]")
 
     skipped = 0
     patchable: list = []   # (vuln, patch) pairs with real code_changes
@@ -724,30 +711,21 @@ def _run_remediate_all_loop(
         if not quiet:
             console.print(f"\n[cyan]▸[/cyan] {vuln.get('severity')} {vuln.get('rule_id')}  {vuln.get('file_path')}:{vuln.get('start_line')}")
 
-        if use_local_claude and Path(vuln.get("file_path", "")).name in _LOCK_FILES:
+        if use_local and Path(vuln.get("file_path", "")).name in _LOCK_FILES:
             if not quiet:
                 console.print(f"  [dim]↩ Lock file — cannot patch directly. Fix manually with your package manager.[/dim]")
             skipped += 1
             continue
 
         try:
-            if use_multi_turn:
+            if use_local:
                 if not quiet:
-                    console.print("[dim]Using multi-turn Claude (iterative loop)[/dim]")
+                    console.print("[dim]Using local Claude Agent SDK (multi-turn)[/dim]")
                 vuln_detail = client.get_vulnerability(scan_id, vuln_id)
                 mt = MultiTurnRemediator(max_iterations=max_iterations)
                 patch, iteration_log = mt.remediate(vuln_detail, work_dir=str(target))
                 patch["iteration_log"] = iteration_log
-
-            if not use_multi_turn and use_local_claude:
-                vuln_detail = client.get_vulnerability(scan_id, vuln_id)
-                full_file_path = target / vuln_detail.get("file_path", "")
-                if full_file_path.is_file():
-                    source = full_file_path.read_text()
-                else:
-                    source = vuln_detail.get("surrounding_context", "") or vuln_detail.get("code_snippet", "")
-                patch = remediator.generate_patch(vuln_detail, source)
-            elif not use_multi_turn:
+            else:
                 client.request_remediation(scan_id, vuln_id)
                 for _ in range(60):
                     scan_data = client.get_scan(scan_id)
@@ -771,7 +749,7 @@ def _run_remediate_all_loop(
 
             patch["vuln_id"] = vuln_id
             patch["scan_id"] = scan_id
-            patch["generated_by"] = "multi_turn" if use_multi_turn else ("local_claude" if use_local_claude else "backend_engine")
+            patch["generated_by"] = "local_multi_turn" if use_local else "backend_autonomous"
             patch["created_at"] = datetime.utcnow().isoformat()
             # Pop iteration_log BEFORE writing patch.json so it doesn't appear in both files
             iter_log = patch.pop("iteration_log", None)
@@ -893,13 +871,12 @@ def _run_remediate_all_loop(
 @app.command("remediate-all")
 def remediate_all(
     scan_id: str = typer.Argument(..., help="Scan ID to remediate"),
-    use_backend: bool = typer.Option(False, "--use-backend", help="Use backend AI engine instead of local Claude Agent SDK"),
+    local: bool = typer.Option(False, "--local", help="Use local Claude Agent SDK (multi-turn) instead of backend autonomous agent"),
     severity: Optional[str] = typer.Option(None, "--severity", help="Comma-separated severities to include, e.g. CRITICAL,HIGH"),
-    multi_turn: bool = typer.Option(False, "--multi-turn", help="Use iterative multi-turn agent loop"),
-    max_iterations: int = typer.Option(6, "--max-iterations", help="Max iterations per vulnerability (multi-turn only)"),
+    max_iterations: int = typer.Option(6, "--max-iterations", help="Max iterations per vulnerability (local multi-turn only)"),
     api_url: Optional[str] = typer.Option(None, "--api-url"),
 ):
-    """Generate patches and run batch revalidation for a completed scan. Default: local Claude."""
+    """Generate patches and run batch revalidation for a completed scan. Default: backend autonomous agent."""
     client = SecurityPipelineClient(api_url=api_url)
 
     history = load_history()
@@ -914,8 +891,7 @@ def remediate_all(
             scan_id=scan_id,
             target=Path(entry["path"]),
             severity=severity,
-            use_local_claude=not use_backend,
-            use_multi_turn=multi_turn,
+            use_local=local,
             max_iterations=max_iterations,
             quiet=False,
             scanners=entry.get("scanners"),
@@ -932,10 +908,10 @@ def run(
     author: str = typer.Option("", "--author", "-a", help="Your name for audit trail"),
     project: str = typer.Option("", "--project", "-p", help="Project name (defaults to dir name)"),
     severity: Optional[str] = typer.Option(None, "--severity", help="Comma-separated severities: CRITICAL,HIGH"),
-    use_backend: bool = typer.Option(False, "--use-backend", help="Use backend AI engine instead of local Claude Agent SDK"),
+    local: bool = typer.Option(False, "--local", help="Use local Claude Agent SDK (multi-turn) instead of backend autonomous agent"),
     api_url: Optional[str] = typer.Option(None, "--api-url"),
 ):
-    """Scan + remediate in one shot (2 total scans). Default: local Claude for patch generation."""
+    """Scan + remediate in one shot (2 total scans). Default: backend autonomous agent."""
     target = Path(path).resolve()
     if not target.is_dir():
         rprint(f"[red]Error:[/red] '{path}' is not a directory.")
@@ -969,7 +945,7 @@ def run(
             scan_id=scan_id,
             target=target,
             severity=severity,
-            use_local_claude=not use_backend,
+            use_local=local,
             quiet=False,
             scanners=scanner_list,
         )

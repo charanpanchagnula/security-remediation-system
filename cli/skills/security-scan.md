@@ -1,12 +1,13 @@
 ---
 name: security-scan
-description: Scan a codebase for vulnerabilities, generate AI patches with local Claude, run a single batch revalidation, then show a dry-run diff of all passing patches.
+description: Scan a codebase for vulnerabilities, generate AI patches via the backend autonomous agent, run a single batch revalidation, then show a dry-run diff of all passing patches.
 ---
 
 ## /security-scan
 
 Runs the complete two-scan security remediation pipeline using the security-pipeline MCP server.
-**Patch generation uses local Claude by default** — no separate API key needed.
+**Patch generation uses the backend autonomous agent by default.**
+Pass `--local` in CLI commands to use the local Claude Agent SDK (multi-turn) instead.
 
 ### Pipeline
 
@@ -20,9 +21,9 @@ Runs the complete two-scan security remediation pipeline using the security-pipe
 
 3. **Show findings** — call `get_scan_results`. Display totals by severity.
 
-4. **Generate all patches** — call `remediate_all` with `scan_id` and `repo_path`.
-   This uses local Claude to generate patches for every vulnerability.
-   Pass `use_backend_engine: true` only if you want the server-side AI engine instead.
+4. **Generate all patches** — call `run_full_pipeline` (or use the CLI `security-pipeline remediate-all <scan_id>`).
+   This uses the backend autonomous agent to generate patches for every vulnerability.
+   Use `--local` CLI flag only if you want the local Claude Agent SDK (multi-turn) instead.
 
    Internally this:
    - Skips lock files automatically (`uv.lock`, `poetry.lock`, etc.) — tell user to fix those via package manager
@@ -62,7 +63,8 @@ Runs the complete two-scan security remediation pipeline using the security-pipe
 ### Notes
 
 - The backend must be running (`docker compose up -d` or `APP_ENV=local uvicorn ...`)
-- Pass `use_backend_engine: true` in `remediate_all` / `run_full_pipeline` to use server-side AI
+- Remediation uses the backend autonomous agent by default
+- Use `--local` CLI flag to use local Claude Agent SDK (multi-turn) instead
 - All files in `.security-scan/` are gitignored automatically
 - To apply patches manually: `security-pipeline apply <scan_id> --all`
 - To preview without applying: `security-pipeline apply <scan_id> --all --dry-run`

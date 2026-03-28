@@ -1,6 +1,6 @@
 ---
 name: security-scan
-description: Scan a codebase for security vulnerabilities, generate AI patches, revalidate, and show a dry-run diff before applying. Supports quick mode (one call) and step-by-step mode.
+description: Scan a codebase for security vulnerabilities, generate AI patches via the backend autonomous agent, revalidate, and show a dry-run diff before applying. Supports quick mode (one call) and step-by-step mode.
 triggers:
   - "run security scan"
   - "scan for vulnerabilities"
@@ -12,10 +12,8 @@ triggers:
 # Security Scan Skill
 
 Scan a codebase for security vulnerabilities and generate AI-powered patches using the `security-pipeline` MCP tools.
-Patch generation uses **local Claude by default** when running inside Claude Code.
-When running from any other AI IDE (Antigravity, Cursor, Windsurf, etc.), the MCP server
-auto-detects that Claude Code is unavailable and falls back to the backend engine automatically.
-You can also force backend mode by passing `use_backend_engine: true`.
+**Patch generation uses the backend autonomous agent by default.**
+Use the `--local` CLI flag to use the local Claude Agent SDK (multi-turn) instead.
 
 ## Prerequisites
 
@@ -39,7 +37,7 @@ Call `run_full_pipeline` — scans, patches, and revalidates in one blocking cal
 | `author` | `$USER` | Name for the audit trail |
 | `scanners` | `["semgrep","checkov","trivy"]` | Which scanners to run |
 | `severity` | all | Filter, e.g. `"CRITICAL,HIGH"` |
-| `use_backend_engine` | `false` | Set `true` to use server-side AI instead of local Claude |
+| `max_iterations` | `6` | Max iterations per vuln (only used with CLI `--local` flag) |
 
 **What to show the user from the response:**
 - Total vulnerabilities found (`total_vulns`)
@@ -64,9 +62,9 @@ Call `get_scan_results`. Show findings grouped by severity.
 Ask: "N findings detected — shall I generate patches for all?"
 
 **Step 4 — Generate patches + batch revalidation**
-Call `remediate_all` with `scan_id` and `repo_path`.
-Generates all patches first, then runs **one** revalidation scan with every patch applied at once.
-Optionally pass `use_backend_engine: true` to use the server instead of local Claude.
+Use `run_full_pipeline` or the CLI command `security-pipeline remediate-all <scan_id>`.
+Generates all patches via the backend autonomous agent, then runs **one** revalidation scan with every patch applied at once.
+Use `--local` CLI flag to use local Claude Agent SDK (multi-turn) instead.
 
 **Step 5 — Show dry-run preview and apply**
 Display the `dry_run_patches` from the response — these are exactly what `apply --all` will write.
@@ -91,10 +89,10 @@ Then call `apply_all_remediations` or tell the user to run `security-pipeline ap
 
 ### Special handling
 - **Lock files** (`uv.lock`, `poetry.lock`, `package-lock.json`, etc.) — skipped automatically; user must fix via their package manager
-- **False positives** — when local Claude determines a finding is not a real vulnerability, it marks it as such; these are skipped from revalidation and noted in reports
-- **Evaluation concerns** — when Claude has partial confidence, concerns are recorded in the patch and appear in reports
+- **False positives** — when the autonomous agent determines a finding is not a real vulnerability, it marks it as such; these are skipped from revalidation and noted in reports
+- **Evaluation concerns** — when the agent has partial confidence, concerns are recorded in the patch and appear in reports
 
-### Generated files after `remediate_all` / `run_full_pipeline`
+### Generated files after `run_full_pipeline`
 
 ```
 .security-scan/                        # gitignored by default
@@ -119,13 +117,11 @@ Then call `apply_all_remediations` or tell the user to run `security-pipeline ap
 
 | Tool | Description |
 |------|-------------|
-| `run_full_pipeline` | Full pipeline in one call: scan → patch all → batch revalidate → reports |
+| `run_full_pipeline` | Full pipeline in one call: scan → patch all via backend autonomous agent → batch revalidate → reports |
 | `run_security_scan` | Submit directory for scanning, returns `scan_id` immediately |
 | `poll_scan_status` | Lightweight status check, call every 30s while waiting |
 | `get_scan_results` | Full findings + remediations for a completed scan |
 | `get_vulnerability_detail` | Deep detail for a specific vulnerability |
-| `request_remediation` | Queue server-side AI remediation for a single vulnerability |
-| `remediate_all` | Patch all vulns + batch revalidate for an existing scan |
 | `apply_remediation` | Apply a single generated patch to disk (checks revalidation status) |
 | `apply_all_remediations` | Apply all PASS patches for a scan |
 | `sync_sessions` | Refresh all `.security-scan/sessions/` from backend (updates vulnerability details) |
