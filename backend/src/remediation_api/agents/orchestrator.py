@@ -16,9 +16,11 @@ from ..logger import get_logger
 
 logger = get_logger(__name__)
 
+_SEMGREP_SEVERITY_MAP = {"ERROR": "HIGH", "WARNING": "MEDIUM", "INFO": "LOW", "NOTE": "LOW"}
+
 class Orchestrator:
     def __init__(self):
-        pass  # No vector store needed
+        pass
         
     async def ingest_scan(self, repo_url: str, commit_sha: Optional[str] = None, scanner_types: List[str] = ["semgrep"]) -> Dict[str, Any]:
         """
@@ -267,6 +269,7 @@ class Orchestrator:
             logger.warning(f"Could not delete archive {archive_key}: {e}")
 
     async def remediate_vulnerability(self, scan_id: str, vuln_id: str) -> Optional[RemediationResponse]:
+        """Trigger autonomous remediation for a single vulnerability. Raises ValueError if workspace unavailable."""
         scan_data = result_service.get_scan(scan_id)
         if not scan_data:
             raise ValueError("Scan not found")
@@ -297,14 +300,14 @@ class Orchestrator:
         return rem_response
         
     async def batch_remediate_scan(self, scan_id: str):
+        """Trigger autonomous remediation for all un-remediated vulnerabilities in a scan."""
         scan_data = result_service.get_scan(scan_id)
         if not scan_data:
             return
 
         work_dir = scan_data.get("work_dir", "")
         if not work_dir or not Path(work_dir).exists():
-            logger.error(f"No workspace for {scan_id} — cannot batch remediate")
-            return
+            raise ValueError(f"Workspace not available for scan {scan_id} — re-run the scan to generate a workspace")
 
         vulnerabilities = scan_data.get("vulnerabilities", [])
         existing_vuln_ids = {r["vulnerability_id"] for r in scan_data.get("remediations", [])}
@@ -354,9 +357,8 @@ class Orchestrator:
             code_changes = [
                 CodeChange(**c) for c in patch_dict.get("code_changes", [])
             ]
-            _severity_map = {"ERROR": "HIGH", "WARNING": "MEDIUM", "INFO": "LOW", "NOTE": "LOW"}
             severity = vuln.severity if vuln.severity in ("LOW", "MEDIUM", "HIGH", "CRITICAL") \
-                else _severity_map.get(vuln.severity.upper(), "MEDIUM")
+                else _SEMGREP_SEVERITY_MAP.get(vuln.severity.upper(), "MEDIUM")
             return RemediationResponse(
                 vulnerability_id=vuln.id,
                 severity=severity,
