@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 from typing import Optional
 
 class Settings(BaseSettings):
@@ -26,7 +27,8 @@ class Settings(BaseSettings):
     # Agent Settings
     MAX_RETRIES: int = 2
     CONFIDENCE_THRESHOLD: float = 0.7
-    
+    USE_LEGACY_SINGLE_SHOT: bool = Field(False, description="Fall back to Generator+Evaluator loop instead of autonomous multi-turn agent")
+
     model_config = SettingsConfigDict(env_file=[".env", "../.env"], env_ignore_empty=True, extra="ignore")
 
 settings = Settings()

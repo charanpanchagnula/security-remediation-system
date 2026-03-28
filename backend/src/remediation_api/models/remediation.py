@@ -19,6 +19,7 @@ class RemediationResponse(BaseModel):
     evaluation_concerns: List[str] = Field(default_factory=list, description="Any concerns found during self-evaluation that could not be resolved")
     is_false_positive: bool = Field(False, description="Whether the AI believes this is a false positive")
     confidence_score: float = Field(0.0, description="Confidence in the remediation or false positive judgment")
+    iteration_log: List[dict] = Field(default_factory=list, description="Per-iteration actions and validation results (multi-turn runs only)")
 
 class EvaluationResult(BaseModel):
     completeness_score: float = Field(..., ge=0.0, le=1.0, description="Does it fix the root cause?")
