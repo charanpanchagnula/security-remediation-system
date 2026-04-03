@@ -199,9 +199,9 @@ class RemediationToolkit(Toolkit):
         return result
 
     def validate_and_scan(self, file_path: str) -> str:
-        """Run syntax check on the sandboxed file. Returns JSON result dict.
-        Security validation happens in the final batch revalidation scan (server-side),
-        not per-iteration, to avoid expensive scanner calls during the agent loop."""
+        """Run syntax check and semgrep security scan on the sandboxed file.
+        Returns JSON result dict with 'syntax' and 'semgrep' keys.
+        Semgrep scan catches co-located rule violations introduced by the patch."""
         self.state.record_action(f"validate_and_scan({file_path})")
         results: dict[str, str] = {}
         target = self.sandbox_dir / file_path
@@ -237,11 +237,45 @@ class RemediationToolkit(Toolkit):
         else:
             results["syntax"] = "ok (syntax check not available for this file type)"
 
+        # Run semgrep on the patched file to catch co-located rule violations
+        results["semgrep"] = self._run_semgrep_on_file(target)
+
         self.state.record_validation(results)
         result_str = json.dumps(results)
         self.state.log_tool_call("validate_and_scan", {"file_path": file_path}, result_str)
         self.state.commit()
         return result_str
+
+    def _run_semgrep_on_file(self, target: Path) -> str:
+        """Run semgrep on a single file and return a summary string."""
+        try:
+            rules_path = Path("/app/backend/rules")
+            if not rules_path.exists():
+                rules_path = Path(__file__).parent.parent.parent.parent / "rules"
+
+            cmd = ["semgrep", "scan", "--no-git-ignore", "--json", str(target)]
+            if rules_path.exists():
+                cmd = ["semgrep", "scan", "--config", str(rules_path), "--no-git-ignore", "--json", str(target)]
+
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if r.returncode not in (0, 1):
+                return f"semgrep error (exit {r.returncode}): {r.stderr.strip()[:200]}"
+
+            data = json.loads(r.stdout) if r.stdout.strip() else {}
+            findings = data.get("results", [])
+            if not findings:
+                return "ok"
+
+            summaries = [
+                f"{f.get('check_id', 'unknown')} (line {f.get('start', {}).get('line', '?')})"
+                for f in findings[:5]
+            ]
+            suffix = f" (+{len(findings) - 5} more)" if len(findings) > 5 else ""
+            return f"FAIL: {len(findings)} issue(s) found: {'; '.join(summaries)}{suffix}"
+        except subprocess.TimeoutExpired:
+            return "semgrep timed out (skipped)"
+        except Exception as e:
+            return f"semgrep error: {str(e)[:200]}"
 
     def rollback(self) -> str:
         """Reset the sandbox to a clean copy of work_dir."""
@@ -285,9 +319,11 @@ Your task: fix a security vulnerability iteratively using the tools provided.
 3. APPLY: Call apply_patch for each file that needs changing. Multi-file patches are fine —
    call apply_patch once per file. Keep original_code EXACTLY as it appears (indentation, newlines).
 
-4. VALIDATE: Call validate_and_scan on each patched file to check syntax only.
+4. VALIDATE: Call validate_and_scan on each patched file to check syntax AND semgrep security rules.
    - If syntax FAIL → rollback and fix.
-   - If syntax ok → proceed to step 5.
+   - If semgrep FAIL → read the reported rule IDs and line numbers, fix those issues, then re-validate.
+     The semgrep findings may be co-located rules in the same file — they ALL must be fixed.
+   - If both ok → proceed to step 5.
    - For XML/YAML/JSON files, validate_and_scan also checks parse validity — always run it.
 
 5. REASON: Before outputting the final JSON, explicitly reason about:
