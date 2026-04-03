@@ -150,16 +150,16 @@ def test_remediate_returns_patch_and_log(work_dir):
     with patch("src.remediation_api.agents.autonomous_agent.Agent") as MockAgent:
         MockAgent.return_value.run.return_value = _mock_response(json.dumps(VALID_PATCH))
         agent = AutonomousRemediatorAgent()
-        patch_dict, log = agent.remediate(VULN, work_dir)
+        patch_dict, iteration_log, llm_messages = agent.remediate(VULN, work_dir)
     assert patch_dict["summary"] == "Parameterize query"
-    assert isinstance(log, list)
+    assert isinstance(iteration_log, list)
 
 def test_remediate_strips_markdown_fences(work_dir):
     fenced = "```json\n" + json.dumps(VALID_PATCH) + "\n```"
     with patch("src.remediation_api.agents.autonomous_agent.Agent") as MockAgent:
         MockAgent.return_value.run.return_value = _mock_response(fenced)
         agent = AutonomousRemediatorAgent()
-        patch_dict, _ = agent.remediate(VULN, work_dir)
+        patch_dict, _, _msgs = agent.remediate(VULN, work_dir)
     assert patch_dict["is_false_positive"] is False
 
 def test_remediate_raises_on_non_json(work_dir):

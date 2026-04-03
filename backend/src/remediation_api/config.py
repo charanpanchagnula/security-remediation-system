@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     # Agent Settings
     MAX_ITERATIONS: int = Field(6, description="Maximum validate_and_scan iterations for the autonomous agent")
     REMEDIATION_MODEL: str = Field("deepseek-chat", description="Model ID passed to AutonomousRemediatorAgent")
+    MAX_PARALLEL_REMEDIATIONS: int = Field(5, description="Max concurrent autonomous remediations in batch_remediate_scan")
 
     model_config = SettingsConfigDict(env_file=[".env", "../.env"], env_ignore_empty=True, extra="ignore")
 

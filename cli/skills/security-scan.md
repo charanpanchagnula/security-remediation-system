@@ -6,8 +6,7 @@ description: Scan a codebase for vulnerabilities, generate AI patches via the ba
 ## /security-scan
 
 Runs the complete two-scan security remediation pipeline using the security-pipeline MCP server.
-**Patch generation uses the backend autonomous agent by default.**
-Pass `--local` in CLI commands to use the local Claude Agent SDK (multi-turn) instead.
+Patch generation uses the backend autonomous agent.
 
 ### Pipeline
 
@@ -23,14 +22,12 @@ Pass `--local` in CLI commands to use the local Claude Agent SDK (multi-turn) in
 
 4. **Generate all patches** — call `run_full_pipeline` (or use the CLI `security-pipeline remediate-all <scan_id>`).
    This uses the backend autonomous agent to generate patches for every vulnerability.
-   Use `--local` CLI flag only if you want the local Claude Agent SDK (multi-turn) instead.
 
    Internally this:
    - Skips lock files automatically (`uv.lock`, `poetry.lock`, etc.) — tell user to fix those via package manager
    - Marks false positives as skipped (not patched, not revalidated)
    - Generates patches for all remaining findings
-   - Applies all patches at once to a temp copy of the source
-   - Submits patched tar as **one** revalidation scan
+   - Triggers server-side batch revalidation via `revalidate_scan` — the backend applies all patches to the workspace and runs one final scan
    - Analyses per-vulnerability results from that single scan
    - Writes `REPORT-CRITICAL.md` and `REPORT-HIGH.md` to `.security-scan/patches/<scan_id>/`
 
@@ -63,8 +60,6 @@ Pass `--local` in CLI commands to use the local Claude Agent SDK (multi-turn) in
 ### Notes
 
 - The backend must be running (`docker compose up -d` or `APP_ENV=local uvicorn ...`)
-- Remediation uses the backend autonomous agent by default
-- Use `--local` CLI flag to use local Claude Agent SDK (multi-turn) instead
 - All files in `.security-scan/` are gitignored automatically
 - To apply patches manually: `security-pipeline apply <scan_id> --all`
 - To preview without applying: `security-pipeline apply <scan_id> --all --dry-run`

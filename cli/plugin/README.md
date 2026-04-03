@@ -91,7 +91,7 @@ Reports include: rule, file location, patch summary, confidence score, code diff
 | Environment Variable | Default | Description |
 |----------------------|---------|-------------|
 | `SECURITY_PIPELINE_API_URL` | `http://localhost:8000` | Backend API URL |
-| `ANTHROPIC_API_KEY` | (from env) | Required for local Claude patch generation; picked up automatically if set |
+| `SECURITY_PIPELINE_API_URL` | `http://localhost:8000` | Override the default backend URL |
 
 ---
 

@@ -19,5 +19,6 @@ class RemediationResponse(BaseModel):
     evaluation_concerns: List[str] = Field(default_factory=list, description="Any concerns found during self-evaluation that could not be resolved")
     is_false_positive: bool = Field(False, description="Whether the AI believes this is a false positive")
     confidence_score: float = Field(0.0, description="Confidence in the remediation or false positive judgment")
-    iteration_log: List[dict] = Field(default_factory=list, description="Per-iteration actions and validation results (multi-turn runs only)")
-    llm_messages: List[dict] = Field(default_factory=list, description="Full LLM conversation history (system/user/assistant/tool turns)")
+    security_reasoning: dict = Field(default_factory=dict)
+    iterations_used: int = Field(0, description="Number of validate_and_scan iterations the agent used")
+    max_iterations: int = Field(0, description="Max iterations the agent was allowed")

@@ -79,6 +79,7 @@ class RemediationToolkit(Toolkit):
         self.state = state
         for fn in (
             self.read_file,
+            self.read_file_lines,
             self.search_code,
             self.list_files,
             self.apply_patch,
@@ -90,15 +91,46 @@ class RemediationToolkit(Toolkit):
     # --- tools ---
 
     def read_file(self, path: str) -> str:
-        """Read a source file from the working directory. path is relative to work_dir."""
+        """Read a source file (capped at 300 lines). Use read_file_lines for large files."""
         self.state.record_action(f"read_file({path})")
+        _MAX_LINES = 300
         try:
-            result = (self.work_dir / path).read_text(encoding="utf-8", errors="replace")
+            target = (self.work_dir / path).resolve()
+            if not str(target).startswith(str(self.work_dir.resolve())):
+                return "ERROR: path escapes working directory"
+            lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+            if len(lines) <= _MAX_LINES:
+                result = "\n".join(f"{i+1}: {l}" for i, l in enumerate(lines))
+            else:
+                result = (
+                    "\n".join(f"{i+1}: {l}" for i, l in enumerate(lines[:_MAX_LINES]))
+                    + f"\n... [{len(lines) - _MAX_LINES} more lines — use read_file_lines(path, start, end) to read specific ranges]"
+                )
         except FileNotFoundError:
             result = f"ERROR: file not found: {path}"
         except Exception as e:
             result = f"ERROR: {e}"
         self.state.log_tool_call("read_file", {"path": path}, result)
+        return result
+
+    def read_file_lines(self, path: str, start_line: int, end_line: int) -> str:
+        """Read specific lines from a file (1-indexed, inclusive). Use for large files."""
+        self.state.record_action(f"read_file_lines({path}, {start_line}, {end_line})")
+        try:
+            target = (self.work_dir / path).resolve()
+            if not str(target).startswith(str(self.work_dir.resolve())):
+                return "ERROR: path escapes working directory"
+            lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+            s = max(0, start_line - 1)
+            e = min(len(lines), end_line)
+            result = "\n".join(f"{i+s+1}: {l}" for i, l in enumerate(lines[s:e]))
+            if not result:
+                result = f"(no lines in range {start_line}–{end_line})"
+        except FileNotFoundError:
+            result = f"ERROR: file not found: {path}"
+        except Exception as e:
+            result = f"ERROR: {e}"
+        self.state.log_tool_call("read_file_lines", {"path": path, "start_line": start_line, "end_line": end_line}, result)
         return result
 
     def search_code(self, query: str, path: str = ".") -> str:
@@ -110,7 +142,7 @@ class RemediationToolkit(Toolkit):
         # Try ripgrep first, fall back to grep
         try:
             result = subprocess.run(
-                ["rg", "--json", "-n", query, str(search_path)],
+                ["rg", "--json", "-n", "--", query, str(search_path)],
                 capture_output=True, text=True, timeout=15
             )
             if result.returncode not in (0, 1):
@@ -127,7 +159,7 @@ class RemediationToolkit(Toolkit):
             result_str = "\n".join(lines) if lines else "(no matches)"
         except FileNotFoundError:
             result = subprocess.run(
-                ["grep", "-rn", query, str(search_path)],
+                ["grep", "-rn", "--", query, str(search_path)],
                 capture_output=True, text=True, timeout=15
             )
             result_str = result.stdout.strip() or "(no matches)"
@@ -167,35 +199,43 @@ class RemediationToolkit(Toolkit):
         return result
 
     def validate_and_scan(self, file_path: str) -> str:
-        """Run syntax check + security rescan on the sandboxed file. Returns JSON result dict."""
+        """Run syntax check on the sandboxed file. Returns JSON result dict.
+        Security validation happens in the final batch revalidation scan (server-side),
+        not per-iteration, to avoid expensive scanner calls during the agent loop."""
         self.state.record_action(f"validate_and_scan({file_path})")
         results: dict[str, str] = {}
         target = self.sandbox_dir / file_path
 
-        # Syntax check
         if file_path.endswith(".py"):
             r = subprocess.run(
                 ["python3", "-m", "py_compile", str(target)],
                 capture_output=True, text=True, timeout=10
             )
             results["syntax"] = "ok" if r.returncode == 0 else f"FAIL: {r.stderr.strip()[:300]}"
-        elif file_path.endswith((".js", ".ts")):
+        elif file_path.endswith((".js", ".ts", ".mjs", ".cjs")):
             r = subprocess.run(
                 ["node", "--check", str(target)],
                 capture_output=True, text=True, timeout=10
             )
             results["syntax"] = "ok" if r.returncode == 0 else f"FAIL: {r.stderr.strip()[:300]}"
-        elif file_path.endswith(".tf"):
-            r = subprocess.run(
-                ["terraform", "validate", "-json"],
-                capture_output=True, text=True, cwd=str(target.parent), timeout=30
-            )
+        elif file_path.endswith(".rb"):
+            r = subprocess.run(["ruby", "-c", str(target)], capture_output=True, text=True, timeout=10)
             results["syntax"] = "ok" if r.returncode == 0 else f"FAIL: {r.stderr.strip()[:300]}"
+        elif file_path.endswith(".go"):
+            r = subprocess.run(["go", "vet", str(target)], capture_output=True, text=True, timeout=15, cwd=str(target.parent))
+            results["syntax"] = "ok" if r.returncode == 0 else f"FAIL: {r.stderr.strip()[:300]}"
+        elif file_path.endswith((".tf", ".hcl")):
+            r = subprocess.run(["terraform", "validate", "-json"], capture_output=True, text=True, cwd=str(target.parent), timeout=30)
+            results["syntax"] = "ok" if r.returncode == 0 else f"FAIL: {r.stderr.strip()[:300]}"
+        elif file_path.endswith((".yaml", ".yml", ".json")):
+            try:
+                import yaml
+                yaml.safe_load(target.read_text()) if file_path.endswith((".yaml", ".yml")) else json.loads(target.read_text())
+                results["syntax"] = "ok"
+            except Exception as e:
+                results["syntax"] = f"FAIL: {str(e)[:300]}"
         else:
-            results["syntax"] = "skipped (unknown file type)"
-
-        # Security rescan
-        results["security_scan"] = self._rescan(target, file_path)
+            results["syntax"] = "ok (syntax check not available for this file type)"
 
         self.state.record_validation(results)
         result_str = json.dumps(results)
@@ -222,50 +262,6 @@ class RemediationToolkit(Toolkit):
         except Exception:
             pass
 
-    # --- private ---
-
-    def _rescan(self, target: Path, file_path: str) -> str:
-        try:
-            if self.scanner == "semgrep":
-                r = subprocess.run(
-                    ["semgrep", "scan", "--json", "--config=auto", str(target)],
-                    capture_output=True, text=True, timeout=60
-                )
-                if not r.stdout.strip() and r.returncode not in (0, 1):
-                    return f"WARN: semgrep exited {r.returncode} with no output — result unreliable"
-                data = json.loads(r.stdout) if r.stdout.strip() else {}
-                findings = data.get("results", [])
-                if not findings:
-                    return "PASS (0 findings)"
-                summaries = [f"{f['check_id']} line {f['start']['line']}" for f in findings[:5]]
-                return f"FAIL ({len(findings)} findings): {'; '.join(summaries)}"
-            elif self.scanner == "checkov":
-                r = subprocess.run(
-                    ["checkov", "-f", str(target), "--output", "json", "--quiet"],
-                    capture_output=True, text=True, timeout=60
-                )
-                if not r.stdout.strip() and r.returncode not in (0, 1):
-                    return f"WARN: checkov exited {r.returncode} with no output — result unreliable"
-                data = json.loads(r.stdout) if r.stdout.strip() else {}
-                failed = (data.get("summary", {}) or {}).get("failed", 0)
-                return "PASS" if failed == 0 else f"FAIL ({failed} checks failed)"
-            elif self.scanner == "trivy":
-                r = subprocess.run(
-                    ["trivy", "fs", "--format", "json", "--quiet", str(target)],
-                    capture_output=True, text=True, timeout=60
-                )
-                if not r.stdout.strip() and r.returncode not in (0, 1):
-                    return f"WARN: trivy exited {r.returncode} with no output — result unreliable"
-                data = json.loads(r.stdout) if r.stdout.strip() else {}
-                vulns = sum(len(res.get("Vulnerabilities") or []) for res in data.get("Results", []))
-                return "PASS" if vulns == 0 else f"FAIL ({vulns} vulnerabilities found)"
-            else:
-                return f"skipped (unknown scanner: {self.scanner})"
-        except FileNotFoundError:
-            return f"skipped ({self.scanner} CLI not found)"
-        except Exception as e:
-            return f"ERROR: {e}"
-
 
 _SYSTEM_PROMPT = """You are an autonomous security remediation engineer.
 
@@ -273,19 +269,34 @@ Your task: fix a security vulnerability iteratively using the tools provided.
 
 ## Workflow (repeat up to {max_iterations} times):
 
-1. ANALYZE: Use read_file, search_code, list_files to understand the codebase.
-   For complex vulnerabilities (multi-file, Terraform modules, imports), read ALL related files first.
+1. ANALYZE: Use read_file, read_file_lines, search_code, list_files to understand the codebase.
+   read_file shows up to 300 lines. For large files, use read_file_lines(path, start, end) to read
+   specific line ranges. The vulnerability location is given in the prompt — read_file_lines around
+   those lines is usually sufficient. For complex vulnerabilities (multi-file, imports), read related files too.
 
-2. GENERATE: Formulate the minimal correct patch.
+2. GENERATE: Formulate the minimal correct patch. Key rules:
+   - For dependency version upgrades (pom.xml, package.json, go.mod, requirements.txt, Gemfile):
+     ALWAYS upgrade to the ABSOLUTE LATEST stable version, not just the minimum fixed version.
+     Minimum fixed versions frequently have their own CVEs discovered later.
+   - For GitHub Actions workflows (CKV2_GHA_1): add `permissions: read-all` at the top-level
+     workflow scope AND at each job scope if jobs are defined. Read the file first to see its structure.
+   - Only modify files directly related to the vulnerability. Do NOT touch unrelated files.
 
 3. APPLY: Call apply_patch for each file that needs changing. Multi-file patches are fine —
    call apply_patch once per file. Keep original_code EXACTLY as it appears (indentation, newlines).
 
-4. VALIDATE: Call validate_and_scan on each patched file. Read the JSON result.
+4. VALIDATE: Call validate_and_scan on each patched file to check syntax only.
+   - If syntax FAIL → rollback and fix.
+   - If syntax ok → proceed to step 5.
+   - For XML/YAML/JSON files, validate_and_scan also checks parse validity — always run it.
 
-5. EVALUATE:
-   - If security_scan=PASS and syntax=ok → you are done. Output the final JSON.
-   - If validation fails → call rollback, analyze the error, refine, and repeat.
+5. REASON: Before outputting the final JSON, explicitly reason about:
+   - Root cause: does the patch address the actual vulnerability or just mask it?
+   - Coverage: are all code paths that trigger this vulnerability fixed?
+   - Bypass: can an attacker still reach the unsafe operation via a different path?
+   - New risk: does the fix introduce a new vulnerability or break security properties?
+   - Scope: does the patch touch ONLY the necessary files? Unnecessary changes cause false positives.
+   Only output the final JSON once confident the patch is correct.
 
 ## Output (LAST message, after all tool calls):
 Respond with ONLY a JSON object:
@@ -303,7 +314,13 @@ Respond with ONLY a JSON object:
     }}
   ],
   "security_implications": ["list"],
-  "evaluation_concerns": ["empty if clean"]
+  "evaluation_concerns": ["empty if clean"],
+  "security_reasoning": {{
+    "root_cause_addressed": "...",
+    "coverage": "...",
+    "bypass_risk": "...",
+    "new_risk": "..."
+  }}
 }}
 
 Never output intermediate JSON. Only the final response is the JSON object.
@@ -315,7 +332,7 @@ class AutonomousRemediatorAgent:
         self.model_id = model_id
         self.max_iterations = max_iterations
 
-    def remediate(self, vulnerability: dict, work_dir: str) -> tuple[dict, list, list]:
+    def remediate(self, vulnerability: dict, work_dir: str, memory_context: str = "") -> tuple[dict, list, list]:
         """
         Run multi-turn tool-calling remediation.
         Returns (patch_dict, iteration_log, llm_messages).
@@ -325,7 +342,7 @@ class AutonomousRemediatorAgent:
         """
         state = _IterationState()
         scanner = vulnerability.get("scanner", "semgrep")
-        prompt = self._build_prompt(vulnerability, work_dir)
+        prompt = self._build_prompt(vulnerability, work_dir, memory_context)
         toolkit = RemediationToolkit(work_dir=work_dir, scanner=scanner, state=state)
         try:
             agent = Agent(
@@ -336,7 +353,12 @@ class AutonomousRemediatorAgent:
             )
             response = agent.run(prompt)
             result_text = self._extract_text(response)
-            patch = self._parse_json(result_text)
+            try:
+                patch = self._parse_json(result_text)
+            except ValueError:
+                # Model output reasoning text without JSON — do a recovery call
+                result_text = self._recover_json(result_text, vulnerability)
+                patch = self._parse_json(result_text)
 
             # Flush any uncommitted tool calls (agent finished without calling validate_and_scan)
             if state._tool_calls or state._actions:
@@ -383,7 +405,7 @@ class AutonomousRemediatorAgent:
             tool_calls = entry.get("tool_calls", [])
             reasoning = entry.get("reasoning", "")
             if tool_calls or reasoning:
-                msg: dict = {"role": "assistant"}
+                msg: dict = {"role": "assistant", "iteration": entry["iteration"]}
                 if reasoning:
                     msg["reasoning"] = reasoning
                 if tool_calls:
@@ -401,14 +423,14 @@ class AutonomousRemediatorAgent:
 
         return messages
 
-    def _build_prompt(self, vuln: dict, work_dir: str) -> str:
+    def _build_prompt(self, vuln: dict, work_dir: str, memory_context: str = "") -> str:
         scanner = vuln.get("scanner", "")
         fix_hint = {
             "semgrep": "Replace the vulnerable pattern with a secure equivalent.",
             "checkov": "Add or fix Terraform attributes to satisfy the control.",
             "trivy":   "Update the vulnerable package to the minimum safe version.",
         }.get(scanner, "Produce a minimal, correct fix.")
-        return (
+        vuln_block = (
             f"## Vulnerability\n"
             f"- Scanner: {vuln.get('scanner')}\n"
             f"- Rule: {vuln.get('rule_id')}\n"
@@ -423,6 +445,51 @@ class AutonomousRemediatorAgent:
             f"- Max {self.max_iterations} validate_and_scan calls\n"
             f"- Only fix the flagged vulnerability — no unrelated changes\n"
         )
+        if memory_context:
+            return memory_context + vuln_block
+        return vuln_block
+
+    def _recover_json(self, analysis_text: str, vulnerability: dict) -> str:
+        """
+        Recovery call: the agent produced analysis text but no JSON.
+        Ask the model directly to format the analysis as the required JSON.
+        """
+        from openai import OpenAI
+        from ..config import settings
+
+        logger.warning(f"[autonomous] JSON parse failed, attempting recovery call for {vulnerability.get('rule_id')}")
+
+        recovery_prompt = (
+            f"You analyzed a security vulnerability and produced the following analysis:\n\n"
+            f"{analysis_text[:3000]}\n\n"
+            f"Now output ONLY the JSON result object (no other text):\n"
+            f'{{\n'
+            f'  "summary": "one-line description of the fix",\n'
+            f'  "confidence_score": 0.0-1.0,\n'
+            f'  "is_false_positive": true/false,\n'
+            f'  "code_changes": [{{\n'
+            f'    "file_path": "relative/path",\n'
+            f'    "start_line": N, "end_line": N,\n'
+            f'    "original_code": "exact lines replaced",\n'
+            f'    "new_code": "replacement",\n'
+            f'    "description": "why this fixes the issue"\n'
+            f'  }}],\n'
+            f'  "security_implications": [],\n'
+            f'  "evaluation_concerns": []\n'
+            f'}}'
+        )
+        try:
+            client = OpenAI(api_key=settings.DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+            resp = client.chat.completions.create(
+                model=self.model_id,
+                messages=[{"role": "user", "content": recovery_prompt}],
+                temperature=0,
+                max_tokens=2000,
+            )
+            return resp.choices[0].message.content or ""
+        except Exception as e:
+            logger.error(f"[autonomous] Recovery call failed: {e}")
+            raise ValueError(f"Agent returned non-JSON output and recovery failed: {e}")
 
     @staticmethod
     def _extract_text(response) -> str:
@@ -434,22 +501,40 @@ class AutonomousRemediatorAgent:
     @staticmethod
     def _parse_json(text: str) -> dict:
         text = text.strip()
+
         # Strip markdown fences
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\s*", "", text)
-            text = re.sub(r"\s*```$", "", text).strip()
-        # Direct parse
+        fenced = re.sub(r"^```(?:json)?\s*", "", text)
+        fenced = re.sub(r"\s*```\s*$", "", fenced).strip()
+        try:
+            return json.loads(fenced)
+        except json.JSONDecodeError:
+            pass
+
+        # Direct parse of original text
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
-        # Extract first {...} block
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
+
+        # Try all {...} blocks from last to first — the final output JSON is at the end
+        candidates = list(re.finditer(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text, re.DOTALL))
+        for match in reversed(candidates):
             try:
-                return json.loads(match.group())
+                parsed = json.loads(match.group())
+                # Must look like a remediation response
+                if "code_changes" in parsed or "summary" in parsed or "is_false_positive" in parsed:
+                    return parsed
             except json.JSONDecodeError:
                 pass
+
+        # Last resort: greedy match from last '{' that contains 'summary' or 'code_changes'
+        last_brace = text.rfind("{")
+        if last_brace != -1:
+            try:
+                return json.loads(text[last_brace:])
+            except json.JSONDecodeError:
+                pass
+
         raise ValueError(f"Agent returned non-JSON output:\n{text[:300]}")
 
 

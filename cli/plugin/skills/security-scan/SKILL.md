@@ -12,8 +12,7 @@ triggers:
 # Security Scan Skill
 
 Scan a codebase for security vulnerabilities and generate AI-powered patches using the `security-pipeline` MCP tools.
-**Patch generation uses the backend autonomous agent by default.**
-Use the `--local` CLI flag to use the local Claude Agent SDK (multi-turn) instead.
+Patch generation uses the backend autonomous agent.
 
 ## Prerequisites
 
@@ -37,7 +36,6 @@ Call `run_full_pipeline` — scans, patches, and revalidates in one blocking cal
 | `author` | `$USER` | Name for the audit trail |
 | `scanners` | `["semgrep","checkov","trivy"]` | Which scanners to run |
 | `severity` | all | Filter, e.g. `"CRITICAL,HIGH"` |
-| `max_iterations` | `6` | Max iterations per vuln (only used with CLI `--local` flag) |
 
 **What to show the user from the response:**
 - Total vulnerabilities found (`total_vulns`)
@@ -63,8 +61,7 @@ Ask: "N findings detected — shall I generate patches for all?"
 
 **Step 4 — Generate patches + batch revalidation**
 Use `run_full_pipeline` or the CLI command `security-pipeline remediate-all <scan_id>`.
-Generates all patches via the backend autonomous agent, then runs **one** revalidation scan with every patch applied at once.
-Use `--local` CLI flag to use local Claude Agent SDK (multi-turn) instead.
+Generates all patches via the backend autonomous agent, then triggers server-side batch revalidation via `revalidate_scan` — the backend applies all patches to the workspace and runs one final scan.
 
 **Step 5 — Show dry-run preview and apply**
 Display the `dry_run_patches` from the response — these are exactly what `apply --all` will write.
@@ -126,3 +123,4 @@ Then call `apply_all_remediations` or tell the user to run `security-pipeline ap
 | `apply_all_remediations` | Apply all PASS patches for a scan |
 | `sync_sessions` | Refresh all `.security-scan/sessions/` from backend (updates vulnerability details) |
 | `list_scans` | List all scans from local history |
+| `revalidate_scan` | Trigger server-side batch revalidation — backend applies all patches and runs one final scan |

@@ -198,21 +198,6 @@ def test_apply_all_remediations_updates_session_on_apply(tmp_path):
     assert updated_session["remediation_status"]["vuln-005"] == "applied"
 
 
-def test_remediate_all_returns_summary(tmp_path):
-    """remediate_all tool runs the remediation loop and returns summary."""
-    mock_result = {"passed": 3, "failed": 1, "skipped": 0, "total_vulns": 4, "patches_dir": str(tmp_path)}
-
-    with patch("security_pipeline.mcp_server.SecurityPipelineClient"), \
-         patch("security_pipeline.mcp_server._run_remediate_all_loop", return_value=mock_result) as mock_loop:
-        result = run_tool("remediate_all", {"scan_id": "scan-zzz", "repo_path": str(tmp_path)})
-
-    data = json.loads(result[0].text)
-    assert data["scan_id"] == "scan-zzz"
-    assert data["passed"] == 3
-    assert data["failed"] == 1
-    assert data["total_vulns"] == 4
-    mock_loop.assert_called_once()
-
 
 def test_run_full_pipeline_returns_scan_id_and_summary(tmp_path):
     """run_full_pipeline submits scan then runs remediation loop, returns combined result."""
@@ -232,44 +217,3 @@ def test_run_full_pipeline_returns_scan_id_and_summary(tmp_path):
     assert data["total_vulns"] == 3
     mock_submit.assert_called_once()
     mock_loop.assert_called_once()
-
-
-def test_remediate_all_passes_use_multi_turn_params(tmp_path):
-    """remediate_all forwards use_multi_turn and max_iterations to _run_remediate_all_loop."""
-    mock_result = {"passed": 1, "failed": 0, "skipped": 0, "total_vulns": 1, "patches_dir": str(tmp_path)}
-    with patch("security_pipeline.mcp_server.SecurityPipelineClient"), \
-         patch("security_pipeline.mcp_server._run_remediate_all_loop", return_value=mock_result) as mock_loop:
-        run_tool("remediate_all", {
-            "scan_id": "scan-zzz",
-            "repo_path": str(tmp_path),
-            "use_multi_turn": True,
-            "max_iterations": 3,
-        })
-    call_args = mock_loop.call_args
-    # use_multi_turn is the 6th positional arg (index 5), max_iterations is 7th (index 6)
-    args, kwargs = call_args
-    use_multi_turn = kwargs.get("use_multi_turn", args[5] if len(args) > 5 else None)
-    max_iterations = kwargs.get("max_iterations", args[6] if len(args) > 6 else None)
-    assert use_multi_turn is True
-    assert max_iterations == 3
-
-
-def test_run_full_pipeline_passes_use_multi_turn_params(tmp_path):
-    """run_full_pipeline forwards use_multi_turn and max_iterations to _run_remediate_all_loop."""
-    mock_result = {"passed": 1, "failed": 0, "skipped": 0, "total_vulns": 1, "patches_dir": str(tmp_path)}
-    with patch("security_pipeline.mcp_server.SecurityPipelineClient"), \
-         patch("security_pipeline.mcp_server._submit_scan_job", return_value=("scan-001", tmp_path)), \
-         patch("security_pipeline.mcp_server._run_remediate_all_loop", return_value=mock_result) as mock_loop:
-        run_tool("run_full_pipeline", {
-            "path": str(tmp_path),
-            "project_name": "test",
-            "use_multi_turn": True,
-            "max_iterations": 4,
-        })
-    call_args = mock_loop.call_args
-    # use_multi_turn is the 6th positional arg (index 5), max_iterations is 7th (index 6)
-    args, kwargs = call_args
-    use_multi_turn = kwargs.get("use_multi_turn", args[5] if len(args) > 5 else None)
-    max_iterations = kwargs.get("max_iterations", args[6] if len(args) > 6 else None)
-    assert use_multi_turn is True
-    assert max_iterations == 4

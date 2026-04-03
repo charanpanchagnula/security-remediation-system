@@ -5,8 +5,7 @@
   "mcp": {
     "command": "security-pipeline-mcp",
     "env": {
-      "SECURITY_PIPELINE_API_URL": "http://localhost:8000",
-      "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}"
+      "SECURITY_PIPELINE_API_URL": "http://localhost:8000"
     }
   },
   "skills": [

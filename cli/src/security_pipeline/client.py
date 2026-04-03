@@ -52,6 +52,12 @@ class SecurityPipelineClient:
         response.raise_for_status()
         return response.json()
 
+    def revalidate_scan(self, scan_id: str) -> dict:
+        """POST /api/v1/scans/{scan_id}/revalidate"""
+        response = httpx.post(f"{self.api_url}/api/v1/scans/{scan_id}/revalidate", timeout=30)
+        response.raise_for_status()
+        return response.json()
+
     def request_remediation(self, scan_id: str, vuln_id: str) -> dict:
         """POST /api/v1/scan/{scan_id}/remediate/{vuln_id}"""
         response = httpx.post(

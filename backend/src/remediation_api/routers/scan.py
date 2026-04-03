@@ -104,6 +104,16 @@ async def get_vulnerability(scan_id: str, vuln_id: str):
     return vuln
 
 
+@router.post("/scans/{scan_id}/revalidate")
+async def revalidate_scan_endpoint(scan_id: str, background_tasks: BackgroundTasks):
+    """Trigger server-side batch revalidation for all remediations in a completed scan."""
+    scan_data = result_service.get_scan(scan_id)
+    if not scan_data:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    background_tasks.add_task(orchestrator.revalidate_scan, scan_id)
+    return {"scan_id": scan_id, "status": "revalidation_queued"}
+
+
 @router.delete("/scans/{scan_id}")
 async def delete_scan(scan_id: str):
     """Delete a scan result."""

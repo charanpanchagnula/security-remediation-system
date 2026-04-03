@@ -125,11 +125,12 @@ class ScannerService:
             rules_path = Path(__file__).parent.parent.parent.parent / "rules"
             
         cmd = [
-            "semgrep", 
-            "scan", 
-            "--config", "p/default", 
-            "--config", "rules",     
-            "--json", 
+            "semgrep",
+            "scan",
+            "--config", "auto",
+            "--config", "rules",
+            "--no-git-ignore",
+            "--json",
             str(target_dir)
         ]
         
@@ -158,9 +159,9 @@ class ScannerService:
         stderr_text = stderr.decode()
         
         logger.info(f"Semgrep return code: {process.returncode}")
-        
+
         vulnerabilities = []
-        
+
         if process.returncode in [0, 1]:
             try:
                 if not stdout_text.strip():

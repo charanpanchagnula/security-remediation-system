@@ -46,7 +46,7 @@ async def list_tools() -> list[Tool]:
                 "After revalidation, writes REPORT-CRITICAL.md and REPORT-HIGH.md to "
                 ".security-scan/patches/<scan_id>/ and saves full vulnerability details to "
                 ".security-scan/sessions/<scan_id>.json. "
-                "Patch generation uses the backend autonomous agent by default; pass use_local=true (CLI --local flag) to use local Claude Agent SDK. "
+                "Patch generation uses the backend autonomous agent. "
                 "Long-running blocking call. Returns scan_id, revalidation_scan_id, summary, and dry_run_patches."
             ),
             inputSchema={
@@ -66,11 +66,6 @@ async def list_tools() -> list[Tool]:
                     "severity": {
                         "type": "string",
                         "description": "Comma-separated severities to include, e.g. 'CRITICAL,HIGH'. Omit for all.",
-                    },
-                    "max_iterations": {
-                        "type": "integer",
-                        "default": 6,
-                        "description": "Max refinement iterations per vulnerability (local --local mode only).",
                     },
                 },
                 "required": ["path", "project_name"],
@@ -207,11 +202,45 @@ async def list_tools() -> list[Tool]:
             description="List all previously submitted scans with their current status from local history.",
             inputSchema={"type": "object", "properties": {}},
         ),
+        Tool(
+            name="revalidate_scan",
+            description=(
+                "Trigger server-side batch revalidation for all remediations in a completed scan. "
+                "Applies all patches together to the workspace and runs one final scan to determine "
+                "PASS/FAIL per vulnerability. Returns immediately — poll get_scan_results to check "
+                "when remediations have revalidation_status populated."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {"scan_id": {"type": "string"}},
+                "required": ["scan_id"],
+            },
+        ),
     ]
+
+
+def _safe_path_component(value: str) -> str:
+    """
+    Reject values that would cause path traversal when used as a single path component.
+    Raises ValueError if the value contains a path separator or dotdot segment.
+    """
+    if not value:
+        raise ValueError("Empty path component")
+    # Disallow any directory separator or parent-directory traversal
+    if "/" in value or "\\" in value or ".." in value:
+        raise ValueError(f"Invalid path component (potential traversal): {value!r}")
+    return value
 
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    try:
+        return await _call_tool_inner(name, arguments)
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e), "tool": name}))]
+
+
+async def _call_tool_inner(name: str, arguments: dict) -> list[TextContent]:
     client = SecurityPipelineClient(api_url=API_URL)
 
     if name == "run_full_pipeline":
@@ -228,15 +257,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             API_URL,
         )
 
-        max_iterations = arguments.get("max_iterations", 6)
         result = await asyncio.to_thread(
             _run_remediate_all_loop,
             client,
             scan_id,
             target,
             arguments.get("severity"),
-            False,  # use_local — always use backend autonomous agent via MCP
-            max_iterations,
             True,  # quiet — no console output on stdio wire
             scanners,
         )
@@ -425,6 +451,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "status": status,
             })
         return [TextContent(type="text", text=json.dumps(items, indent=2))]
+
+    elif name == "revalidate_scan":
+        result = await asyncio.to_thread(client.revalidate_scan, arguments["scan_id"])
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 

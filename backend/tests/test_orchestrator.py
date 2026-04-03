@@ -89,7 +89,7 @@ async def test_idempotent_returns_existing_remediation():
         "summary": "already fixed", "explanation": "pre-existing",
         "code_changes": [], "security_implications": [],
         "evaluation_concerns": [], "is_false_positive": False,
-        "confidence_score": 0.9, "iteration_log": [], "llm_messages": []
+        "confidence_score": 0.9
     }
     mock_scan = {
         "vulnerabilities": [{"id": vuln_id, "rule_id": "rule-x", "scanner": "semgrep",

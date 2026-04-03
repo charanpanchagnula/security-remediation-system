@@ -13,6 +13,7 @@ from ..models.remediation import RemediationResponse, CodeChange
 from .autonomous_agent import AutonomousRemediatorAgent
 from ..config import settings
 from ..logger import get_logger
+from ..services.memory_service import load_agent_context, consolidate_learnings
 
 logger = get_logger(__name__)
 
@@ -289,13 +290,11 @@ class Orchestrator:
         if not work_dir or not Path(work_dir).exists():
             raise ValueError(f"Workspace not available for scan {scan_id} — re-run the scan to generate a workspace")
 
-        rem_response = await self._process_vulnerability_autonomous(vuln_obj, work_dir, scan_id)
+        project_id = scan_data.get("project_name", "")
+        rem_response = await self._process_vulnerability_autonomous(vuln_obj, work_dir, scan_id, project_id)
 
         if rem_response:
-            remediations.append(rem_response.model_dump())
-            scan_data["remediations"] = remediations
-            scan_data["summary"]["remediations_generated"] = len(remediations)
-            result_service.save_scan_result(scan_id, scan_data)
+            result_service.append_remediation(scan_id, vuln_id, rem_response.model_dump())
 
         return rem_response
         
@@ -307,30 +306,219 @@ class Orchestrator:
 
         work_dir = scan_data.get("work_dir", "")
         if not work_dir or not Path(work_dir).exists():
-            raise ValueError(f"Workspace not available for scan {scan_id} — re-run the scan to generate a workspace")
+            raise ValueError(f"Workspace not available for scan {scan_id}")
 
         vulnerabilities = scan_data.get("vulnerabilities", [])
         existing_vuln_ids = {r["vulnerability_id"] for r in scan_data.get("remediations", [])}
+        pending = [v for v in vulnerabilities if v["id"] not in existing_vuln_ids]
+        total = len(vulnerabilities)
+        semaphore = asyncio.Semaphore(settings.MAX_PARALLEL_REMEDIATIONS)
 
-        for v_dict in vulnerabilities:
-            if v_dict["id"] in existing_vuln_ids:
+        project_id = scan_data.get("project_name", "")
+
+        async def _remediate_one(v_dict):
+            async with semaphore:
+                vuln_obj = Vulnerability(**v_dict)
+                try:
+                    rem = await self._process_vulnerability_autonomous(vuln_obj, work_dir, scan_id, project_id)
+                    if rem:
+                        result_service.append_remediation(scan_id, vuln_obj.id, rem.model_dump())
+                        logger.info(f"Remediated {vuln_obj.id}")
+                except Exception as e:
+                    logger.error(f"Failed to remediate {vuln_obj.id}: {e}")
+
+        await asyncio.gather(*[_remediate_one(v) for v in pending])
+
+    async def revalidate_scan(self, scan_id: str):
+        """
+        Server-side batch revalidation: apply all patches to a temp workspace copy,
+        run a new scan, then persist per-vuln PASS/FAIL status onto each remediation.
+        """
+        import tarfile
+        import tempfile
+        from ..services.storage import get_storage
+
+        scan_data = result_service.get_scan(scan_id)
+        if not scan_data:
+            logger.error(f"revalidate_scan: scan {scan_id} not found")
+            return
+
+        work_dir = scan_data.get("work_dir", "")
+        if not work_dir or not Path(work_dir).exists():
+            logger.error(f"revalidate_scan: workspace not available for {scan_id}")
+            return
+
+        remediations = scan_data.get("remediations", [])
+        if not remediations:
+            logger.info(f"revalidate_scan: no remediations for {scan_id}, skipping")
+            return
+
+        reval_scan_id = str(uuid.uuid4())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            patched_dir = Path(tmp) / "patched"
+            shutil.copytree(work_dir, str(patched_dir))
+
+            # Apply all patches to the temp copy
+            for rem in remediations:
+                for change in rem.get("code_changes", []):
+                    target = (patched_dir / change["file_path"].lstrip("/")).resolve()
+                    if not str(target).startswith(str(patched_dir.resolve())):
+                        logger.warning(f"revalidate_scan: skipping path that escapes patched_dir: {change['file_path']}")
+                        continue
+                    if not target.exists():
+                        continue
+                    lines = target.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+                    s = change["start_line"] - 1
+                    e = change["end_line"]
+                    new_lines = [change["new_code"] + "\n"] if change["new_code"] else []
+                    lines[s:e] = new_lines
+                    target.write_text("".join(lines), encoding="utf-8")
+
+            # Create tar.gz of patched dir and store it
+            archive_path = Path(tmp) / f"reval-{reval_scan_id}.tar.gz"
+            with tarfile.open(str(archive_path), "w:gz") as tar:
+                tar.add(str(patched_dir), arcname=".")
+
+            archive_key = f"archives/reval-{reval_scan_id}.tar.gz"
+            get_storage().upload_file(str(archive_path), archive_key)
+
+        scanner_types = scan_data.get("scanner_types", ["semgrep"])
+
+        # Register the new scan and process it inline (no queue)
+        initial_result = {
+            "scan_id": reval_scan_id,
+            "project_name": f"revalidation_{scan_id[:8]}",
+            "author": "security-pipeline-revalidation",
+            "source": "revalidation",
+            "repo_url": f"revalidation://{scan_id}",
+            "branch": "revalidation",
+            "commit_sha": None,
+            "archive_key": archive_key,
+            "timestamp": datetime.utcnow().isoformat(),
+            "status": "queued",
+            "scanner_types": scanner_types,
+            "vulnerabilities": [],
+            "remediations": [],
+            "summary": {"total_vulnerabilities": 0, "remediations_generated": 0},
+        }
+        result_service.save_scan_result(reval_scan_id, initial_result)
+
+        job = {
+            "scan_id": reval_scan_id,
+            "repo_url": f"revalidation://{scan_id}",
+            "commit_sha": None,
+            "branch": "revalidation",
+            "archive_key": archive_key,
+            "scanner_types": scanner_types,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+        await self.process_scan_job(job)
+
+        reval_data = result_service.get_scan(reval_scan_id)
+        if not reval_data:
+            logger.error(f"revalidate_scan: reval scan {reval_scan_id} not found after processing")
+            return
+
+        reval_vulns = reval_data.get("vulnerabilities", [])
+
+        # Re-read scan_data to pick up any concurrent remediations
+        fresh = result_service.get_scan(scan_id) or scan_data
+        fresh_rems = fresh.get("remediations", [])
+        orig_vulns_by_id = {v["id"]: v for v in fresh.get("vulnerabilities", [])}
+
+        for rem in fresh_rems:
+            vuln_id = rem.get("vulnerability_id")
+            orig_vuln = orig_vulns_by_id.get(vuln_id)
+            if not orig_vuln:
                 continue
-            vuln_obj = Vulnerability(**v_dict)
-            try:
-                rem = await self._process_vulnerability_autonomous(vuln_obj, work_dir, scan_id)
-                if rem:
-                    scan_data["remediations"].append(rem.model_dump())
-                    scan_data["summary"]["remediations_generated"] = len(scan_data["remediations"])
-                    result_service.save_scan_result(scan_id, scan_data)
-                    logger.info(f"Remediated {len(scan_data['remediations'])}/{len(vulnerabilities)}: {vuln_obj.id}")
-            except Exception as e:
-                logger.error(f"Failed to remediate {vuln_obj.id}: {e}")
+
+            # False positives have no code changes by design — the original finding will
+            # always persist in the patched codebase, so FAIL_STILL_VULNERABLE would be
+            # misleading. Mark them explicitly instead of running the FAIL/PASS logic.
+            if rem.get("is_false_positive"):
+                rem["revalidation_status"] = "FALSE_POSITIVE"
+                rem["revalidation_scan_id"] = reval_scan_id
+                continue
+
+            patched_files = [c["file_path"] for c in rem.get("code_changes", [])]
+
+            # Baseline: issues that already existed in the original scan for patched files.
+            # Only findings NOT in this baseline count as patch-introduced new issues.
+            orig_baseline = {
+                (v.get("rule_id"), v.get("file_path"), v.get("start_line"))
+                for v in fresh.get("vulnerabilities", [])
+                if v.get("file_path") in patched_files
+            }
+
+            original_still_present = any(
+                v.get("rule_id") == orig_vuln.get("rule_id")
+                and v.get("file_path") == orig_vuln.get("file_path")
+                and v.get("start_line") == orig_vuln.get("start_line")
+                for v in reval_vulns
+            )
+            new_issues = [
+                v for v in reval_vulns
+                if v.get("file_path") in patched_files
+                and (v.get("rule_id"), v.get("file_path"), v.get("start_line")) not in orig_baseline
+                and not (
+                    v.get("rule_id") == orig_vuln.get("rule_id")
+                    and v.get("file_path") == orig_vuln.get("file_path")
+                    and v.get("start_line") == orig_vuln.get("start_line")
+                )
+            ]
+
+            if original_still_present and new_issues:
+                status = "FAIL_BOTH"
+            elif original_still_present:
+                status = "FAIL_STILL_VULNERABLE"
+            elif new_issues:
+                status = "FAIL_NEW_ISSUES"
+            else:
+                status = "PASS"
+
+            rem["revalidation_status"] = status
+            rem["revalidation_scan_id"] = reval_scan_id
+
+        fresh["remediations"] = fresh_rems
+
+        # Build a human-readable top-level summary of revalidation results
+        status_counts: Dict[str, int] = {}
+        for rem in fresh_rems:
+            s = rem.get("revalidation_status")
+            if s:
+                status_counts[s] = status_counts.get(s, 0) + 1
+        total_rems = len(fresh_rems)
+        passed = status_counts.get("PASS", 0)
+        false_positives = status_counts.get("FALSE_POSITIVE", 0)
+        # FALSE_POSITIVE entries are correct analysis, not failures — exclude from fail count
+        failed = sum(v for k, v in status_counts.items() if k not in ("PASS", "FALSE_POSITIVE"))
+        # Pass rate denominator: only actual patches (PASS + real FAILs), not FPs
+        validated = passed + failed
+        fresh["revalidation_summary"] = {
+            "revalidation_scan_id": reval_scan_id,
+            "total_patches": total_rems,
+            "passed": passed,
+            "false_positives": false_positives,
+            "failed": failed,
+            "pass_rate": f"{round(passed / validated * 100)}%" if validated else "n/a",
+            "by_status": status_counts,
+        }
+
+        result_service.save_scan_result(scan_id, fresh)
+        logger.info(f"revalidate_scan complete for {scan_id}: reval_scan_id={reval_scan_id}")
+
+        try:
+            consolidate_learnings(fresh)
+        except Exception as e:
+            logger.warning(f"[memory] consolidate_learnings failed (non-fatal): {e}")
 
     async def _process_vulnerability_autonomous(
         self,
         vuln: Vulnerability,
         work_dir: str,
         scan_id: str,
+        project_id: str = "",
     ) -> Optional[RemediationResponse]:
         """
         Multi-turn autonomous remediation using AutonomousRemediatorAgent.
@@ -350,9 +538,16 @@ class Orchestrator:
             "start_line": vuln.start_line,
             "end_line": vuln.end_line,
         }
+        memory_context = load_agent_context(
+            scanner=vuln.scanner,
+            rule_id=vuln.rule_id,
+            project_id=project_id,
+        )
+        if memory_context:
+            logger.info(f"[memory] injecting context for rule={vuln.rule_id}")
         try:
             patch_dict, iteration_log, llm_messages = await asyncio.to_thread(
-                agent.remediate, vuln_dict, work_dir
+                agent.remediate, vuln_dict, work_dir, memory_context
             )
             code_changes = [
                 CodeChange(**c) for c in patch_dict.get("code_changes", [])
@@ -369,12 +564,32 @@ class Orchestrator:
                 evaluation_concerns=patch_dict.get("evaluation_concerns", []),
                 is_false_positive=patch_dict.get("is_false_positive", False),
                 confidence_score=patch_dict.get("confidence_score", 0.0),
-                iteration_log=iteration_log,
-                llm_messages=llm_messages,
+                iterations_used=len(iteration_log),
+                max_iterations=settings.MAX_ITERATIONS,
             )
-            # Save human-readable conversation log
+            # Save human-readable conversation log (txt file per vuln under conversations/{scan_id}/)
             try:
-                result_service.save_conversation_log(scan_id, vuln.id, llm_messages)
+                vuln_meta = {
+                    "rule_id": vuln.rule_id,
+                    "severity": vuln.severity,
+                    "file_path": vuln.file_path,
+                    "start_line": vuln.start_line,
+                    "message": vuln.message,
+                }
+                remediation_meta = {
+                    "summary": rem_response.summary,
+                    "confidence_score": rem_response.confidence_score,
+                    "is_false_positive": rem_response.is_false_positive,
+                    "code_changes": [c.model_dump() for c in rem_response.code_changes],
+                    "iterations_used": len(iteration_log),
+                    "max_iterations": settings.MAX_ITERATIONS,
+                }
+                result_service.save_conversation_log(
+                    scan_id, vuln.id, llm_messages,
+                    vuln_meta=vuln_meta,
+                    remediation_meta=remediation_meta,
+                    iteration_log=iteration_log,
+                )
             except Exception as e:
                 logger.warning(f"Failed to save conversation log for {vuln.id}: {e}")
             return rem_response
